@@ -37,9 +37,8 @@ SPAWN_INTERVAL = 0.5
 TOTAL_TO_SPAWN = 16
 REQUIRED_TO_SAVE = 12
 TIME_LIMIT = 180.0
-BRIDGE_INTERVAL = 0.22
 BRIDGE_STEPS_MAX = 12
-BRIDGE_ASCENT_RATE = TILE / 2  # climb one tile every two steps
+BRIDGE_BUILD_TURNS = 5  # simulation ticks (60 per second) per bridge segment
 DIG_INTERVAL = 0.15
 ROOTLING_WIDTH = 14
 ROOTLING_HEIGHT = 22
@@ -204,7 +203,7 @@ class Level:
     def remove_bridge_tile(self, tx: int, ty: int) -> None:
         self.bridge_tiles.pop((tx, ty), None)
 
-    def rect_collides_solid(self, rect: pygame.Rect) -> bool:
+    def rect_collides_solid(self, rect: pygame.Rect, direction: Optional[int] = None) -> bool:
         min_tx = rect.left // TILE
         max_tx = rect.right // TILE
         min_ty = rect.top // TILE
@@ -212,6 +211,10 @@ class Level:
         for ty in range(min_ty, max_ty + 1):
             for tx in range(min_tx, max_tx + 1):
                 if self.is_solid(tx, ty):
+                    if direction is not None and (tx, ty) in self.bridge_tiles:
+                        bridge_dir = self.bridge_tiles[(tx, ty)]
+                        if bridge_dir != direction:
+                            continue
                     tile_rect = pygame.Rect(tx * TILE, ty * TILE, TILE, TILE)
                     if rect.colliderect(tile_rect):
                         return True
@@ -281,7 +284,7 @@ class Rootling:
         self.fall_start_y = self.pos.y
         self.fall_time = 0.0
         self.dig_timer = 0.0
-        self.bridge_timer = 0.0
+        self.bridge_progress = 0.0
         self.bridge_steps = 0
         self.bridge_anchor: Optional[Tuple[int, int]] = None
         self.selected = False
@@ -305,6 +308,7 @@ class Rootling:
             if state != RootlingState.BRIDGE:
                 self.bridge_steps = 0
                 self.bridge_anchor = None
+                self.bridge_progress = 0.0
             if state != RootlingState.DIG:
                 self.dig_timer = 0.0
             self.state = state
@@ -322,9 +326,9 @@ class Rootling:
     def assign_bridge(self) -> bool:
         if self.state == RootlingState.WALK and self.on_ground:
             self.set_state(RootlingState.BRIDGE)
-            self.bridge_timer = 0.0
             self.bridge_steps = 0
             self.bridge_anchor = None
+            self.bridge_progress = 0.0
             return True
         return False
 
@@ -373,12 +377,14 @@ class Rootling:
             self.update_fall(dt, level)
             return
 
-        self.vel.x = WALK_SPEED * self.direction
-        self.vel.y = 0
+        if self.wall_ahead(level):
+            self.direction *= -1
 
         if self.check_blockers_ahead(others):
             self.direction *= -1
-            self.vel.x = WALK_SPEED * self.direction
+
+        self.vel.x = WALK_SPEED * self.direction
+        self.vel.y = 0
 
         self.apply_horizontal_movement(level, self.vel.x * dt)
 
@@ -416,30 +422,34 @@ class Rootling:
 
     def update_bridge(self, dt: float, level: Level) -> None:
         if self.bridge_anchor is None:
-            self.bridge_anchor = level.world_to_tile(self.rect.centerx, self.rect.bottom - 1)
-        self.bridge_timer += dt
+            anchor_tx, anchor_ty = level.world_to_tile(self.rect.centerx, self.rect.bottom - 1)
+            self.bridge_anchor = (anchor_tx, anchor_ty)
+            self.bridge_progress = 0.0
+
         if self.bridge_steps >= BRIDGE_STEPS_MAX:
             self.set_state(RootlingState.WALK)
             return
-        if self.bridge_timer >= BRIDGE_INTERVAL:
-            self.bridge_timer -= BRIDGE_INTERVAL
-            step = self.bridge_steps + 1
-            dx_tiles = step
-            dy_tiles = (step + 1) // 2
-            if self.direction > 0:
-                target_tx = self.bridge_anchor[0] + dx_tiles
-            else:
-                target_tx = self.bridge_anchor[0] - dx_tiles
-            target_ty = self.bridge_anchor[1] - dy_tiles
-            if not level.add_bridge_tile(target_tx, target_ty, self.direction):
-                self.set_state(RootlingState.WALK)
-                return
-            self.bridge_steps += 1
-            self.pos.x += self.direction * (TILE * 0.5)
-            self.pos.y -= BRIDGE_ASCENT_RATE / 2
 
-        self.vel.xy = WALK_SPEED * self.direction * 0.5, 0
-        self.apply_horizontal_movement(level, self.vel.x * dt)
+        self.vel.xy = 0, 0
+        self.on_ground = True
+        self.bridge_progress += dt / FIXED_DT
+        if self.bridge_progress < BRIDGE_BUILD_TURNS:
+            return
+        self.bridge_progress -= BRIDGE_BUILD_TURNS
+
+        step_index = self.bridge_steps
+        target_tx = self.bridge_anchor[0] + self.direction * (step_index + 1)
+        target_ty = self.bridge_anchor[1] - step_index
+        if not level.add_bridge_tile(target_tx, target_ty, self.direction):
+            self.set_state(RootlingState.WALK)
+            return
+
+        self.bridge_steps += 1
+        tile_left = target_tx * TILE
+        self.pos.x = tile_left + (TILE - ROOTLING_WIDTH) / 2
+        self.pos.y = target_ty * TILE - ROOTLING_HEIGHT
+        self.on_ground = True
+
         if not level.rect_collides_solid(self.rect.move(0, 1)):
             self.set_state(RootlingState.FALL)
 
@@ -473,7 +483,7 @@ class Rootling:
         max_step = STEP_HEIGHT_PIXELS
         for step_up in range(0, max_step + 1, 4):
             test_rect = target_rect.move(0, -step_up)
-            if not level.rect_collides_solid(test_rect):
+            if not level.rect_collides_solid(test_rect, self.direction):
                 self.pos.x += dx
                 self.pos.y -= step_up
                 self.on_ground = True
@@ -494,7 +504,7 @@ class Rootling:
             new_rect = self.rect.move(0, offset)
             if level.rect_collides_solid(new_rect):
                 if step_direction > 0:
-                    self.pos.y = (new_rect.bottom // TILE) * TILE - ROOTLING_HEIGHT - 1
+                    self.pos.y = (new_rect.bottom // TILE) * TILE - ROOTLING_HEIGHT
                     self.on_ground = True
                     self.vel.y = 0
                 else:
@@ -508,6 +518,17 @@ class Rootling:
     def check_ground(self, level: Level) -> bool:
         rect = self.rect.move(0, 1)
         return level.rect_collides_solid(rect)
+
+    def wall_ahead(self, level: Level) -> bool:
+        offset = 1 if self.direction > 0 else -1
+        probe_rect = self.rect.move(offset, 0)
+        if not self.on_ground:
+            return level.rect_collides_solid(probe_rect)
+        for step_up in range(0, STEP_HEIGHT_PIXELS + 1, 4):
+            test_rect = probe_rect.move(0, -step_up)
+            if not level.rect_collides_solid(test_rect, self.direction):
+                return False
+        return True
 
     def check_blockers_ahead(self, others: List['Rootling']) -> bool:
         front_rect = self.rect.inflate(6, 6)
