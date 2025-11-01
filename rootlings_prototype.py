@@ -49,6 +49,8 @@ HAZARD_KILL_DELAY = 0.05
 MAX_DIGGERS = 4
 MAX_BRIDGERS = 6
 MAX_BLOCKERS = 2
+MAX_BOMBERS = 2
+BOMBER_COUNTDOWN = 5.0
 
 COLOR_BG_TOP = (50, 65, 90)
 COLOR_BG_BOTTOM = (15, 20, 30)
@@ -290,6 +292,7 @@ class Rootling:
         self.selected = False
         self.dead_timer = 0.0
         self.on_ground = False
+        self.bomber_timer: Optional[float] = None
 
     # ----------------------------------------------------------------------------------
     # Utility properties
@@ -339,6 +342,14 @@ class Rootling:
             return True
         return False
 
+    def assign_bomber(self) -> bool:
+        if self.state in (RootlingState.EXITED, RootlingState.DEAD):
+            return False
+        if self.bomber_timer is not None:
+            return False
+        self.bomber_timer = BOMBER_COUNTDOWN
+        return True
+
     # ----------------------------------------------------------------------------------
     # Update logic
     # ----------------------------------------------------------------------------------
@@ -351,6 +362,12 @@ class Rootling:
         if level.rect_overlaps_hazard(self.rect):
             self.die()
             return
+
+        if self.bomber_timer is not None:
+            self.bomber_timer -= dt
+            if self.bomber_timer <= 0:
+                self.explode(level)
+                return
 
         if self.state == RootlingState.BLOCK:
             self.vel.xy = 0, 0
@@ -544,6 +561,19 @@ class Rootling:
         if self.state != RootlingState.DEAD:
             self.state = RootlingState.DEAD
             self.dead_timer = 0.0
+            self.bomber_timer = None
+
+    def explode(self, level: Level) -> None:
+        center_tx, center_ty = level.world_to_tile(self.rect.centerx, self.rect.centery)
+        radius = 1
+        for ty in range(center_ty - radius, center_ty + radius + 1):
+            for tx in range(center_tx - radius, center_tx + radius + 1):
+                if abs(tx - center_tx) <= radius and abs(ty - center_ty) <= radius:
+                    if level.is_diggable(tx, ty):
+                        level.set_tile(tx, ty, '.')
+                    level.remove_bridge_tile(tx, ty)
+        self.bomber_timer = None
+        self.die()
 
 
 # --------------------------------------------------------------------------------------
@@ -564,7 +594,12 @@ class HUD:
 
         text_lines = [
             f"Spawned {game.spawner.spawned}/{game.spawner.total} | Saved {game.saved} | Dead {game.dead}",
-            f"Dig {game.abilities['dig']}/{MAX_DIGGERS} | Bridge {game.abilities['bridge']}/{MAX_BRIDGERS} | Block {game.abilities['block']}/{MAX_BLOCKERS}",
+            (
+                f"Dig {game.abilities['dig']}/{MAX_DIGGERS} | "
+                f"Bridge {game.abilities['bridge']}/{MAX_BRIDGERS} | "
+                f"Block {game.abilities['block']}/{MAX_BLOCKERS} | "
+                f"Bomber {game.abilities['bomber']}/{MAX_BOMBERS}"
+            ),
             f"Time Left: {int(max(0, game.time_left))}s"
         ]
         x = 12
@@ -574,7 +609,7 @@ class HUD:
             hud_surface.blit(text, (x, y))
             y += 14
 
-        hint = "1:Dig 2:Bridge 3:Block | R:Restart | ESC:Quit"
+        hint = "1:Dig 2:Bridge 3:Block 4:Bomber | R:Restart | ESC:Quit"
         text = self.font_small.render(hint, True, COLOR_HUD_TEXT)
         hud_surface.blit(text, (SCREEN_WIDTH - text.get_width() - 12, 12))
 
@@ -628,6 +663,7 @@ class Game:
             'dig': MAX_DIGGERS,
             'bridge': MAX_BRIDGERS,
             'block': MAX_BLOCKERS,
+            'bomber': MAX_BOMBERS,
         }
         self.saved = 0
         self.dead = 0
@@ -648,6 +684,7 @@ class Game:
             'dig': MAX_DIGGERS,
             'bridge': MAX_BRIDGERS,
             'block': MAX_BLOCKERS,
+            'bomber': MAX_BOMBERS,
         }
         self.saved = 0
         self.dead = 0
@@ -687,6 +724,8 @@ class Game:
                         self.try_assign('bridge')
                     elif event.key == pygame.K_3:
                         self.try_assign('block')
+                    elif event.key == pygame.K_4:
+                        self.try_assign('bomber')
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
                     self.select_rootling(event.pos)
@@ -705,6 +744,8 @@ class Game:
             assigned = self.selected.assign_bridge()
         elif ability == 'block':
             assigned = self.selected.assign_block()
+        elif ability == 'bomber':
+            assigned = self.selected.assign_bomber()
         if assigned:
             self.abilities[ability] -= 1
 
