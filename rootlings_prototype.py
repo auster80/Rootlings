@@ -54,6 +54,13 @@ MAX_BLOCKERS = 2
 MAX_BOMBERS = 2
 BOMBER_COUNTDOWN = 5.0
 
+ABILITY_LIMITS = {
+    'dig': MAX_DIGGERS,
+    'bridge': MAX_BRIDGERS,
+    'block': MAX_BLOCKERS,
+    'bomber': MAX_BOMBERS,
+}
+
 COLOR_BG_TOP = (50, 65, 90)
 COLOR_BG_BOTTOM = (15, 20, 30)
 COLOR_GROUND = (115, 80, 50)
@@ -71,6 +78,9 @@ COLOR_HUD_WARNING = (240, 120, 120)
 COLOR_DEBUG = (120, 200, 240)
 COLOR_PARTICLE_DIRT = (170, 130, 90, 255)
 COLOR_PARTICLE_SPARK = (208, 190, 130, 255)
+
+SPRITE_W = 40
+SPRITE_H = 40
 
 LEVEL_LAYOUT = """
 ########################################
@@ -137,7 +147,7 @@ class Animation:
         return self.frames[self.index] if self.frames else pygame.Surface((1, 1), pygame.SRCALPHA)
 
 
-def load_sheet(path: str, frame_w: int, frame_h: int) -> List[pygame.Surface]:
+def load_sheet(path: str, frame_w: int = SPRITE_W, frame_h: int = SPRITE_H) -> List[pygame.Surface]:
     frames: List[pygame.Surface] = []
     try:
         sheet = pygame.image.load(path).convert_alpha()
@@ -151,7 +161,7 @@ def load_sheet(path: str, frame_w: int, frame_h: int) -> List[pygame.Surface]:
 
 
 def ensure_assets() -> None:
-    """Create placeholder sprite sheets on first run."""
+    """Generate potato-sprout Rootling sprites and tool overlays."""
 
     os.makedirs("assets/rootling", exist_ok=True)
     os.makedirs("assets/fx", exist_ok=True)
@@ -159,122 +169,187 @@ def ensure_assets() -> None:
     if pygame.display.get_surface() is None:
         pygame.display.set_mode((1, 1))
 
-    BODY = (215, 203, 190, 255)
-    OUTLINE = (42, 30, 22, 255)
-    LEAF = (121, 197, 107, 255)
-    GLOW = (239, 216, 142, 200)
-    DIRT = (170, 130, 90, 255)
-    SPARK = (208, 190, 130, 255)
-
     def make_sheet(path: str, frames: int, painter) -> None:
         if os.path.exists(path):
-            return
-        sheet = pygame.Surface((frames * 32, 32), pygame.SRCALPHA)
+            try:
+                existing = pygame.image.load(path)
+                if existing.get_width() == frames * SPRITE_W and existing.get_height() == SPRITE_H:
+                    return
+            except Exception:
+                pass
+        sheet = pygame.Surface((frames * SPRITE_W, SPRITE_H), pygame.SRCALPHA)
         for i in range(frames):
-            frame = pygame.Surface((32, 32), pygame.SRCALPHA)
+            frame = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
             painter(frame, i, frames)
-            sheet.blit(frame, (i * 32, 0))
+            sheet.blit(frame, (i * SPRITE_W, 0))
         pygame.image.save(sheet, path)
 
-    def draw_rootling_pose(surf: pygame.Surface, x: int, y: int, w: int = 16, h: int = 20,
-                           mouth: bool = False, stretch: int = 0, eye_wide: bool = False) -> None:
-        rect = pygame.Rect(x, y - stretch, w, h + stretch)
-        pygame.draw.ellipse(surf, OUTLINE, rect.inflate(4, 4))
-        pygame.draw.ellipse(surf, BODY, rect)
-        leaf_base = (x + w // 2, y - 6 - stretch)
-        pygame.draw.line(surf, OUTLINE, leaf_base, (leaf_base[0] + 4, leaf_base[1] - 4), 2)
-        pygame.draw.circle(surf, LEAF, (leaf_base[0] + 5, leaf_base[1] - 4), 3)
-        eye_radius = 3 if eye_wide else 2
-        pygame.draw.circle(surf, (40, 40, 40), (x + w // 2 + 3, y + 4 - stretch), eye_radius)
-        if mouth:
-            pygame.draw.rect(surf, (40, 40, 40), pygame.Rect(x + w // 2, y + 8 - stretch, 6, 3))
-        glow = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.circle(glow, GLOW, (x + w // 2, y + h // 2), 7)
+    POTATO = (214, 188, 145, 255)
+    POTATO_DARK = (184, 155, 113, 255)
+    OUTL = (45, 30, 20, 255)
+    LEAF = (122, 196, 102, 255)
+    EYE = (40, 40, 40, 255)
+    GLOW = (247, 224, 156, 170)
+    DIRT = (150, 110, 70, 255)
+    WOOD = (190, 170, 120, 255)
+    METAL = (210, 210, 220, 255)
+
+    def draw_shadow(surf: pygame.Surface, cx: int = 20, cy: int = 33, w: int = 20, h: int = 6) -> None:
+        shadow = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        pygame.draw.ellipse(shadow, (0, 0, 0, 75), pygame.Rect(cx - w // 2, cy - h // 2, w, h))
+        surf.blit(shadow, (0, 0))
+
+    def draw_leaves(surf: pygame.Surface, center: Tuple[int, int], sway: int = 0) -> None:
+        cx, cy = center
+        for ang in (-25 + sway, 10 + sway, 45 + sway, -55 + sway):
+            rad = math.radians(ang)
+            ex = cx + int(math.cos(rad) * 6)
+            ey = cy + int(math.sin(rad) * 6)
+            pygame.draw.line(surf, OUTL, (cx, cy), (ex, ey), 2)
+            pygame.draw.circle(surf, LEAF, (ex, ey), 3)
+
+    def draw_potato_body(
+        surf: pygame.Surface,
+        lump: int = 0,
+        face_dir: int = 1,
+        mouth: bool = False,
+        arms: str = "down",
+    ) -> None:
+        draw_shadow(surf)
+        body = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        main = pygame.Rect(8, 10 + lump, 24, 22)
+        pygame.draw.ellipse(body, OUTL, main.inflate(4, 4))
+        pygame.draw.ellipse(body, POTATO, main)
+        top = pygame.Rect(11, 3 + lump, 16, 14)
+        pygame.draw.ellipse(body, OUTL, top.inflate(4, 4))
+        pygame.draw.ellipse(body, POTATO, top)
+        for _ in range(3):
+            px = random.randint(main.left + 2, main.right - 2)
+            py = random.randint(main.top + 4, main.bottom - 2)
+            pygame.draw.circle(body, POTATO_DARK, (px, py), 1)
+        surf.blit(body, (0, 0))
+        draw_leaves(surf, (top.centerx, top.top + 2), sway=lump * 2)
+        glow = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        pygame.draw.circle(glow, GLOW, (main.centerx, main.centery + 2), 7)
         surf.blit(glow, (0, 0), special_flags=pygame.BLEND_PREMULTIPLIED)
+        pygame.draw.rect(surf, OUTL, pygame.Rect(main.left + 2, main.bottom - 2, 5, 3))
+        pygame.draw.rect(surf, OUTL, pygame.Rect(main.right - 7, main.bottom - 2, 5, 3))
+        arm_y = top.centery + 2
+        if arms == "up":
+            pygame.draw.line(surf, OUTL, (top.left - 1, arm_y), (top.left - 4, arm_y - 5), 2)
+            pygame.draw.line(surf, OUTL, (top.right + 1, arm_y), (top.right + 4, arm_y - 5), 2)
+        elif arms == "tool":
+            pygame.draw.line(surf, OUTL, (top.right + 1, arm_y), (top.right + 5, arm_y + 1), 2)
+            pygame.draw.line(surf, OUTL, (top.left - 1, arm_y), (top.left - 4, arm_y + 2), 2)
+        else:
+            pygame.draw.line(surf, OUTL, (top.left - 1, arm_y), (top.left - 4, arm_y + 3), 2)
+            pygame.draw.line(surf, OUTL, (top.right + 1, arm_y), (top.right + 4, arm_y + 3), 2)
+        eye_x = top.centerx + 4 * face_dir
+        eye_y = top.centery
+        pygame.draw.circle(surf, EYE, (eye_x, eye_y), 2)
+        if mouth:
+            pygame.draw.rect(surf, EYE, pygame.Rect(eye_x - 3, eye_y + 5, 6, 2))
 
     def idle_painter(frame: pygame.Surface, i: int, n: int) -> None:
-        bob = int(2 * math.sin((i / max(1, n)) * math.tau))
-        draw_rootling_pose(frame, 8, 10 + bob)
+        bob = int(1.5 * math.sin((i / n) * math.tau))
+        draw_potato_body(frame, lump=bob, face_dir=1)
 
     def walk_painter(frame: pygame.Surface, i: int, n: int) -> None:
-        bob = int(2 * math.sin((i / max(1, n)) * math.tau))
-        draw_rootling_pose(frame, 8, 9 + bob)
-        pygame.draw.rect(frame, OUTLINE, pygame.Rect(8 + (i % 2) * 2, 26, 5, 2))
-        pygame.draw.rect(frame, OUTLINE, pygame.Rect(18 - (i % 2) * 2, 26, 5, 2))
+        bob = int(2.2 * math.sin((i / n) * math.tau))
+        draw_potato_body(frame, lump=bob, face_dir=1)
+        if i % 2 == 0:
+            pygame.draw.rect(frame, OUTL, pygame.Rect(11, 32, 5, 3))
+        else:
+            pygame.draw.rect(frame, OUTL, pygame.Rect(21, 32, 5, 3))
 
-    def fall_painter(frame: pygame.Surface, i: int, n: int, panic: bool = False) -> None:
-        flutter = (i % 2) * 2
-        draw_rootling_pose(frame, 8, 8, stretch=3, mouth=panic, eye_wide=panic)
-        pygame.draw.circle(frame, LEAF, (16 + flutter, 4), 3)
-        if panic:
-            pygame.draw.rect(frame, (40, 40, 40), pygame.Rect(18, 16, 6, 3))
+    def fall_painter(frame: pygame.Surface, i: int, n: int) -> None:
+        draw_potato_body(frame, lump=0, face_dir=1, arms="up")
+
+    def fall_panic_painter(frame: pygame.Surface, i: int, n: int) -> None:
+        draw_potato_body(frame, lump=0, face_dir=1, arms="up", mouth=True)
 
     def dig_painter(frame: pygame.Surface, i: int, n: int) -> None:
-        draw_rootling_pose(frame, 8, 12 + (i % 2))
+        bob = i % 2
+        draw_potato_body(frame, lump=bob, face_dir=1, arms="tool")
         for _ in range(6):
-            px = random.randint(10, 22)
-            py = random.randint(22, 28)
-            frame.set_at((px, py), DIRT)
+            frame.set_at((random.randint(14, 26), random.randint(28, 36)), DIRT)
 
     def bridge_painter(frame: pygame.Surface, i: int, n: int) -> None:
-        draw_rootling_pose(frame, 8, 10)
-        chip_x = 18 + (i % 3)
-        chip_y = 12 - (i % 2)
-        pygame.draw.circle(frame, SPARK, (chip_x, chip_y), 2)
+        draw_potato_body(frame, lump=0, face_dir=1, arms="tool")
+        pygame.draw.circle(frame, WOOD, (28 + (i % 2), 16 - (i % 2)), 2)
 
     def block_painter(frame: pygame.Surface, i: int, n: int) -> None:
-        draw_rootling_pose(frame, 8, 10)
-        pygame.draw.rect(frame, OUTLINE, pygame.Rect(6, 16, 6, 3))
-        pygame.draw.rect(frame, OUTLINE, pygame.Rect(20, 16, 6, 3))
+        draw_potato_body(frame, lump=0, face_dir=1, arms="up")
 
     def explode_painter(frame: pygame.Surface, i: int, n: int) -> None:
         t = i / max(1, n - 1)
         if t < 0.35:
-            stretch = int(8 * t)
-            draw_rootling_pose(frame, 8, 12, stretch=stretch)
+            draw_potato_body(frame, lump=0, face_dir=1, mouth=True, arms="up")
+            draw_shadow(frame, w=23)
+            glow = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+            pygame.draw.circle(glow, (255, 215, 168, 200), (20, 20), int(8 + 10 * t))
+            frame.blit(glow, (0, 0), special_flags=pygame.BLEND_PREMULTIPLIED)
         else:
-            radius = int(6 + 20 * (t - 0.35) / 0.65)
             for _ in range(30):
                 ang = random.random() * math.tau
-                dist = random.uniform(radius * 0.5, radius)
-                x = int(16 + math.cos(ang) * dist)
-                y = int(16 + math.sin(ang) * dist)
-                color = SPARK if random.random() < 0.5 else DIRT
-                if 0 <= x < 32 and 0 <= y < 32:
-                    frame.set_at((x, y), color)
-
-    def particles_painter(frame: pygame.Surface, i: int, n: int) -> None:
-        frame.fill((0, 0, 0, 0))
-        cols = 8
-        rows = 2
-        for y in range(rows):
-            for x in range(cols):
-                cx = x * 4 + 2
-                cy = y * 4 + 2
-                color = SPARK if y == 0 else DIRT
-                pygame.draw.circle(frame, color, (cx, cy), 2)
+                radius = int(6 + 24 * (t - 0.35) / 0.65)
+                px = 20 + int(math.cos(ang) * radius)
+                py = 20 + int(math.sin(ang) * radius)
+                color = WOOD if random.random() < 0.4 else DIRT
+                pygame.draw.circle(frame, color, (px, py), 1)
 
     make_sheet("assets/rootling/rootling_idle.png", 6, idle_painter)
     make_sheet("assets/rootling/rootling_walk.png", 8, walk_painter)
-    make_sheet("assets/rootling/rootling_fall.png", 6, lambda f, i, n: fall_painter(f, i, n, False))
-    make_sheet("assets/rootling/rootling_fall_panic.png", 6, lambda f, i, n: fall_painter(f, i, n, True))
+    make_sheet("assets/rootling/rootling_fall.png", 6, fall_painter)
+    make_sheet("assets/rootling/rootling_fall_panic.png", 6, fall_panic_painter)
     make_sheet("assets/rootling/rootling_dig.png", 6, dig_painter)
     make_sheet("assets/rootling/rootling_bridge.png", 8, bridge_painter)
     make_sheet("assets/rootling/rootling_block.png", 4, block_painter)
     make_sheet("assets/rootling/rootling_explode.png", 10, explode_painter)
-    make_sheet("assets/fx/particles.png", 2, particles_painter)
+
+    tool_dig_path = "assets/rootling/rootling_tool_dig.png"
+    needs_dig = True
+    if os.path.exists(tool_dig_path):
+        try:
+            existing = pygame.image.load(tool_dig_path)
+            needs_dig = existing.get_size() != (SPRITE_W, SPRITE_H)
+        except Exception:
+            needs_dig = True
+    if needs_dig:
+        sheet = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        pygame.draw.line(sheet, WOOD, (30, 16), (24, 26), 3)
+        pygame.draw.polygon(sheet, METAL, [(24, 26), (31, 30), (27, 34), (21, 30)])
+        pygame.image.save(sheet, tool_dig_path)
+
+    tool_bridge_path = "assets/rootling/rootling_tool_bridge.png"
+    needs_bridge = True
+    if os.path.exists(tool_bridge_path):
+        try:
+            existing = pygame.image.load(tool_bridge_path)
+            needs_bridge = existing.get_size() != (SPRITE_W, SPRITE_H)
+        except Exception:
+            needs_bridge = True
+    if needs_bridge:
+        sheet = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        pygame.draw.line(sheet, WOOD, (30, 15), (23, 25), 3)
+        pygame.draw.rect(sheet, (140, 110, 80, 255), pygame.Rect(26, 10, 10, 6))
+        pygame.image.save(sheet, tool_bridge_path)
 
 
 def load_rootling_animations() -> Dict[str, List[pygame.Surface]]:
     animations: Dict[str, List[pygame.Surface]] = {}
-    animations["idle"] = load_sheet("assets/rootling/rootling_idle.png", 32, 32)
-    animations["walk"] = load_sheet("assets/rootling/rootling_walk.png", 32, 32)
-    animations["fall"] = load_sheet("assets/rootling/rootling_fall.png", 32, 32)
-    animations["fall_p"] = load_sheet("assets/rootling/rootling_fall_panic.png", 32, 32)
-    animations["dig"] = load_sheet("assets/rootling/rootling_dig.png", 32, 32)
-    animations["bridge"] = load_sheet("assets/rootling/rootling_bridge.png", 32, 32)
-    animations["block"] = load_sheet("assets/rootling/rootling_block.png", 32, 32)
-    animations["explode"] = load_sheet("assets/rootling/rootling_explode.png", 32, 32)
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    animations["idle"] = load_sheet("assets/rootling/rootling_idle.png")
+    animations["walk"] = load_sheet("assets/rootling/rootling_walk.png")
+    animations["fall"] = load_sheet("assets/rootling/rootling_fall.png")
+    animations["fall_p"] = load_sheet("assets/rootling/rootling_fall_panic.png")
+    animations["dig"] = load_sheet("assets/rootling/rootling_dig.png")
+    animations["bridge"] = load_sheet("assets/rootling/rootling_bridge.png")
+    animations["block"] = load_sheet("assets/rootling/rootling_block.png")
+    animations["explode"] = load_sheet("assets/rootling/rootling_explode.png")
+    animations["tool_dig"] = [pygame.image.load("assets/rootling/rootling_tool_dig.png").convert_alpha()]
+    animations["tool_bridge"] = [pygame.image.load("assets/rootling/rootling_tool_bridge.png").convert_alpha()]
     return animations
 
 
@@ -568,6 +643,40 @@ class Rootling:
         self.bomber_timer = BOMBER_COUNTDOWN
         return True
 
+    def active_abilities(self) -> List[str]:
+        abilities: List[str] = []
+        if self.state == RootlingState.DIG:
+            abilities.append('dig')
+        elif self.state == RootlingState.BRIDGE:
+            abilities.append('bridge')
+        elif self.state == RootlingState.BLOCK:
+            abilities.append('block')
+        if self.bomber_timer is not None:
+            abilities.append('bomber')
+        return abilities
+
+    def cancel_current_tasks(self) -> List[str]:
+        cancelled: List[str] = []
+        if self.state == RootlingState.DIG:
+            cancelled.append('dig')
+            self.set_state(RootlingState.WALK)
+        elif self.state == RootlingState.BRIDGE:
+            cancelled.append('bridge')
+            self.set_state(RootlingState.WALK)
+        elif self.state == RootlingState.BLOCK:
+            cancelled.append('block')
+            self.set_state(RootlingState.WALK)
+        if self.bomber_timer is not None:
+            self.bomber_timer = None
+            cancelled.append('bomber')
+        if self.state == RootlingState.WALK:
+            self.vel.x = WALK_SPEED * self.direction
+            self.vel.y = 0.0
+        if self.level_ref is not None:
+            self.on_ground = self.check_ground(self.level_ref)
+        self.panic = False
+        return cancelled
+
     def current_animation_key(self) -> str:
         if self.state == RootlingState.WALK:
             return "walk"
@@ -593,6 +702,7 @@ class Rootling:
         self.explode_timer = 0.0
         self.vel.xy = 0, 0
         self.selected = False
+        self.bomber_timer = None
         if level is not None:
             center_tx, center_ty = level.world_to_tile(self.rect.centerx, self.rect.centery)
             radius = 1
@@ -855,19 +965,6 @@ class Rootling:
         if anim:
             anim.update(dt)
 
-    def explode(self, level: Level) -> None:
-        center_tx, center_ty = level.world_to_tile(self.rect.centerx, self.rect.centery)
-        radius = 1
-        for ty in range(center_ty - radius, center_ty + radius + 1):
-            for tx in range(center_tx - radius, center_tx + radius + 1):
-                if abs(tx - center_tx) <= radius and abs(ty - center_ty) <= radius:
-                    if level.is_diggable(tx, ty):
-                        level.set_tile(tx, ty, '.')
-                    level.remove_bridge_tile(tx, ty)
-        self.bomber_timer = None
-        self.die()
-
-
 # --------------------------------------------------------------------------------------
 # HUD and rendering helpers
 # --------------------------------------------------------------------------------------
@@ -1040,18 +1137,20 @@ class Game:
     def try_assign(self, ability: str) -> None:
         if not self.selected or self.game_state != GameState.RUNNING:
             return
-        if self.abilities[ability] <= 0:
+        if self.abilities.get(ability, 0) <= 0:
             return
-        assigned = False
-        if ability == 'dig':
-            assigned = self.selected.assign_dig()
-        elif ability == 'bridge':
-            assigned = self.selected.assign_bridge()
-        elif ability == 'block':
-            assigned = self.selected.assign_block()
-        elif ability == 'bomber':
-            assigned = self.selected.assign_bomber()
-        if assigned:
+
+        active = set(self.selected.active_abilities())
+        if ability in active:
+            return
+
+        cancelled = self.selected.cancel_current_tasks()
+        for key in cancelled:
+            if key in self.abilities:
+                max_val = ABILITY_LIMITS.get(key, self.abilities[key])
+                self.abilities[key] = min(max_val, self.abilities[key] + 1)
+
+        if self._apply_ability(self.selected, ability):
             self.abilities[ability] -= 1
 
     def select_rootling(self, pos: Tuple[int, int]) -> None:
@@ -1081,6 +1180,17 @@ class Game:
             if self.selected:
                 self.selected.selected = False
             self.selected = None
+
+    def _apply_ability(self, rootling: Rootling, ability: str) -> bool:
+        if ability == 'dig':
+            return rootling.assign_dig()
+        if ability == 'bridge':
+            return rootling.assign_bridge()
+        if ability == 'block':
+            return rootling.assign_block()
+        if ability == 'bomber':
+            return rootling.assign_bomber()
+        return False
 
     def shake(self, duration: float, magnitude: int) -> None:
         self.shake_time = max(self.shake_time, duration)
@@ -1179,6 +1289,8 @@ class Game:
                     "bridge": Animation(self.anim_defs.get("bridge", []), 10, True),
                     "block": Animation(self.anim_defs.get("block", []), 6, True),
                     "explode": Animation(self.anim_defs.get("explode", []), 16, False),
+                    "tool_dig": Animation(self.anim_defs.get("tool_dig", []), 1, True),
+                    "tool_bridge": Animation(self.anim_defs.get("tool_bridge", []), 1, True),
                 }
                 rootling.game = self
                 rootling.glow_phase = math.tau * ((hash(id(rootling)) & 255) / 255.0)
@@ -1277,36 +1389,50 @@ class Game:
     def draw_rootlings(self) -> None:
         ox, oy = self.render_offset
         time_factor = pygame.time.get_ticks() / 400.0
+
+        def get_sprite(frame: pygame.Surface, flip_x: bool) -> pygame.Surface:
+            if not flip_x:
+                return frame
+            cache_key = (id(frame), -1)
+            cached = self.sprite_cache.get(cache_key)
+            if cached is None:
+                cached = pygame.transform.flip(frame, True, False)
+                self.sprite_cache[cache_key] = cached
+            return cached
+
         for rootling in self.rootlings:
             rect = rootling.rect
-            draw_pos = rect.move(ox, oy)
+            screen_rect = rect.move(ox, oy)
+            draw_x = rect.x - (SPRITE_W - rect.width) // 2 + ox
+            draw_y = rect.y - (SPRITE_H - rect.height) // 2 + oy
+            flip_x = rootling.direction < 0
+
             glow_alpha = int(90 + 60 * math.sin(time_factor + rootling.glow_phase))
             if glow_alpha > 0 and rootling.state != RootlingState.DEAD:
-                glow_surface = pygame.Surface((48, 48), pygame.SRCALPHA)
-                pygame.draw.circle(glow_surface, (239, 216, 142, glow_alpha), (24, 26), 18)
-                glow_rect = glow_surface.get_rect(center=(rect.centerx + ox, rect.centery + oy + 6))
+                glow_surface = pygame.Surface((64, 64), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surface, (239, 216, 142, glow_alpha), (32, 36), 22)
+                glow_rect = glow_surface.get_rect(center=(rect.centerx + ox, rect.centery + oy + 8))
                 self.screen.blit(glow_surface, glow_rect)
 
             if rootling.state == RootlingState.DEAD and rootling.exploding:
                 anim = rootling.animations.get("explode")
                 if anim and anim.frames:
-                    frame = anim.frame
-                    sprite = frame.copy()
+                    frame = anim.frame.copy()
                     alpha = max(0, 255 - int(rootling.dead_timer * 180))
-                    sprite.set_alpha(alpha)
-                    self.screen.blit(sprite, (rect.x - 8 + ox, rect.y - 6 + oy))
+                    frame.set_alpha(alpha)
+                    self.screen.blit(frame, (draw_x, draw_y))
                 else:
                     surface = pygame.Surface(rect.size, pygame.SRCALPHA)
                     alpha = max(0, 255 - int(rootling.dead_timer * 255))
                     surface.fill((*COLOR_HAZARD_BASE, alpha))
-                    self.screen.blit(surface, draw_pos)
+                    self.screen.blit(surface, screen_rect)
                 continue
 
             if rootling.state == RootlingState.DEAD:
                 alpha = max(0, 255 - int(rootling.dead_timer * 255))
                 surface = pygame.Surface(rect.size, pygame.SRCALPHA)
                 surface.fill((*COLOR_HAZARD_BASE, alpha))
-                self.screen.blit(surface, draw_pos)
+                self.screen.blit(surface, screen_rect)
                 continue
 
             key = rootling.current_animation_key()
@@ -1314,29 +1440,33 @@ class Game:
             sprite_drawn = False
             if anim and anim.frames:
                 frame = anim.frame
-                sprite = frame
-                if rootling.direction < 0:
-                    cache_key = (id(frame), -1)
-                    sprite = self.sprite_cache.get(cache_key)
-                    if sprite is None:
-                        sprite = pygame.transform.flip(frame, True, False)
-                        self.sprite_cache[cache_key] = sprite
-                draw_point = (rect.x - 8 + ox, rect.y - 6 + oy)
-                self.screen.blit(sprite, draw_point)
+                sprite = get_sprite(frame, flip_x)
+                self.screen.blit(sprite, (draw_x, draw_y))
                 sprite_drawn = True
 
+                if key == "dig":
+                    tool_anim = rootling.animations.get("tool_dig")
+                    if tool_anim and tool_anim.frames:
+                        tool_frame = get_sprite(tool_anim.frame, flip_x)
+                        self.screen.blit(tool_frame, (draw_x, draw_y))
+                elif key == "bridge":
+                    tool_anim = rootling.animations.get("tool_bridge")
+                    if tool_anim and tool_anim.frames:
+                        tool_frame = get_sprite(tool_anim.frame, flip_x)
+                        self.screen.blit(tool_frame, (draw_x, draw_y))
+
             if not sprite_drawn:
-                pygame.draw.rect(self.screen, COLOR_ROOTLING_OUTLINE, draw_pos.inflate(4, 4), border_radius=6)
-                pygame.draw.rect(self.screen, COLOR_ROOTLING, draw_pos, border_radius=6)
-                eye_y = draw_pos.centery - 4
-                eye_x = draw_pos.centerx + rootling.direction * 4
+                pygame.draw.rect(self.screen, COLOR_ROOTLING_OUTLINE, screen_rect.inflate(4, 4), border_radius=6)
+                pygame.draw.rect(self.screen, COLOR_ROOTLING, screen_rect, border_radius=6)
+                eye_y = screen_rect.centery - 4
+                eye_x = screen_rect.centerx + rootling.direction * 4
                 pygame.draw.circle(self.screen, (40, 40, 40), (eye_x, eye_y), 2)
 
             if rootling.state == RootlingState.BLOCK:
-                block_rect = draw_pos.inflate(10, 4)
+                block_rect = screen_rect.inflate(10, 4)
                 pygame.draw.rect(self.screen, COLOR_SELECTION, block_rect, width=2, border_radius=4)
             if rootling.selected:
-                pygame.draw.circle(self.screen, COLOR_SELECTION, (rect.centerx + ox, rect.bottom + oy + 4), 20, 2)
+                pygame.draw.circle(self.screen, COLOR_SELECTION, (rect.centerx + ox, rect.bottom + oy + 6), 20, 2)
                 if rootling.panic:
                     panic_text = self.bomber_font.render("Panic!", True, COLOR_HUD_WARNING)
                     text_rect = panic_text.get_rect(midbottom=(rect.centerx + ox, rect.top + oy - 6))
