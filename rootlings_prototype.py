@@ -396,7 +396,7 @@ class Rootling:
         dy = self.vel.y * dt
         self.apply_vertical_movement(level, dy)
         if self.on_ground:
-            fall_distance = max(0, (self.fall_start_y - self.rect.bottom) / TILE)
+            fall_distance = max(0, (self.rect.bottom - self.fall_start_y) / TILE)
             if fall_distance > FATAL_FALL_TILES:
                 self.die()
                 return
@@ -595,7 +595,7 @@ class HUD:
             f"Rootlings: {len(game.rootlings)}",
         ]
         if game.selected:
-            fall_distance = max(0.0, (game.selected.fall_start_y - game.selected.rect.bottom) / TILE)
+            fall_distance = max(0.0, (game.selected.rect.bottom - game.selected.fall_start_y) / TILE)
             lines.append(f"Selected State: {game.selected.state.name}")
             lines.append(f"Fall distance: {fall_distance:.2f} tiles")
         mouse_pos = pygame.mouse.get_pos()
