@@ -396,7 +396,7 @@ class Rootling:
         dy = self.vel.y * dt
         self.apply_vertical_movement(level, dy)
         if self.on_ground:
-            fall_distance = max(0, (self.fall_start_y - self.rect.bottom) / TILE)
+            fall_distance = max(0, (self.rect.bottom-self.fall_start_y) / TILE)
             if fall_distance > FATAL_FALL_TILES:
                 self.die()
                 return
