@@ -671,6 +671,7 @@ class Game:
         self.accumulator = 0.0
         self.running = True
         self.debug_overlay = False
+        self.bomber_font = pygame.font.Font(None, 24)
         self.selected: Optional[Rootling] = None
 
     # ----------------------------------------------------------------------------------
@@ -883,6 +884,12 @@ class Game:
                 pygame.draw.rect(self.screen, COLOR_SELECTION, block_rect, width=2, border_radius=4)
             if rootling.selected:
                 pygame.draw.rect(self.screen, COLOR_SELECTION, rect.inflate(8, 8), width=2, border_radius=8)
+            if rootling.bomber_timer is not None:
+                remaining = max(rootling.bomber_timer, 0.0)
+                countdown_text = f"{remaining:.1f}"
+                text_surface = self.bomber_font.render(countdown_text, True, COLOR_HUD_WARNING)
+                text_rect = text_surface.get_rect(midbottom=(rect.centerx, rect.top - 4))
+                self.screen.blit(text_surface, text_rect)
 
 
 # --------------------------------------------------------------------------------------
