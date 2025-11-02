@@ -110,7 +110,7 @@ LEVELS = [
 #..............@....@..................#
 #..................@@@.................#
 #......................................#
-########################################
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 """.strip("\n"),
     },
     {
@@ -137,7 +137,7 @@ LEVELS = [
 #..................@....@..............#
 #.................@@@..................#
 #......................................#
-########################################
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 """.strip("\n"),
     },
     {
@@ -163,7 +163,7 @@ LEVELS = [
 #.....@...@...................@...@....#
 #.....@@@@@...................@@@@@....#
 #......................................#
-########################################
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 """.strip("\n"),
     },
     {
@@ -187,9 +187,9 @@ LEVELS = [
 #S.@....@......#...#...............@..E#
 #..@....@......#...#...............@..@#
 #..@....@......#####...............@..@#
-#..@....#........~~~...............@..@#
+#..@....#........~~~...............#..@#
 #......##........~~~...............@@@@#
-########################################
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 """.strip("\n"),
     },
     {
@@ -215,7 +215,7 @@ LEVELS = [
 #..@....@.......~~~~~...........@..@...#
 #..@....@.......~~~~~...........@..@...#
 #..@@@@@@.......................@@@@...#
-########################################
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 """.strip("\n"),
     },
 ]
@@ -727,6 +727,7 @@ class Rootling:
         self._last_anim_key: Optional[str] = None
         self.game: Optional['Game'] = None
         self.level_ref: Optional[Level] = None
+        self.dig_horizontal_started = False
 
     # ----------------------------------------------------------------------------------
     # Utility properties
@@ -748,6 +749,8 @@ class Rootling:
                 self.bridge_progress = 0.0
             if state not in (RootlingState.DIG, RootlingState.DIG_HORIZONTAL):
                 self.dig_timer = 0.0
+            if state != RootlingState.DIG_HORIZONTAL:
+                self.dig_horizontal_started = False
             if state != RootlingState.FALL:
                 self.panic = False
             self.state = state
@@ -771,6 +774,7 @@ class Rootling:
                 return False
             self.set_state(RootlingState.DIG_HORIZONTAL)
             self.dig_timer = 0.0
+            self.dig_horizontal_started = False
             return True
         return False
 
@@ -994,38 +998,55 @@ class Rootling:
 
         ahead_x = self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 6)
         sample_points = [self.rect.top + 6, self.rect.centery - 2]
-        target_tiles: List[Tuple[int, int]] = []
+        diggable_tiles: List[Tuple[int, int]] = []
+        solid_tiles: List[Tuple[int, int]] = []
         for py in sample_points:
             tile = level.world_to_tile(ahead_x, py)
-            if tile not in target_tiles and level.is_diggable(*tile):
-                target_tiles.append(tile)
+            if level.is_diggable(*tile):
+                if tile not in diggable_tiles:
+                    diggable_tiles.append(tile)
+            elif level.is_solid(*tile):
+                if tile not in solid_tiles:
+                    solid_tiles.append(tile)
 
-        if not target_tiles:
+        if diggable_tiles:
+            self.vel.xy = 0, 0
+            self.dig_timer += dt
+            if self.dig_timer >= DIG_INTERVAL:
+                self.dig_timer -= DIG_INTERVAL
+                removed = False
+                for tile in diggable_tiles:
+                    if level.dig_tile(*tile):
+                        removed = True
+                if removed:
+                    self.dig_horizontal_started = True
+                    step = self.direction * 6
+                    self.apply_horizontal_movement(level, step)
+                    self.on_ground = self.check_ground(level)
+                    if self.game:
+                        front_center = (
+                            self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 2),
+                            self.rect.centery,
+                        )
+                        self.game.spawn_dig_particles(front_center)
+                else:
+                    self.set_state(RootlingState.WALK)
+            return
+
+        if solid_tiles:
             self.set_state(RootlingState.WALK)
             return
 
-        self.dig_timer += dt
-        if self.dig_timer >= DIG_INTERVAL:
-            self.dig_timer -= DIG_INTERVAL
-            removed = False
-            for tile in target_tiles:
-                if level.dig_tile(*tile):
-                    removed = True
-            if removed:
-                step = self.direction * 6
-                self.apply_horizontal_movement(level, step)
-                self.on_ground = self.check_ground(level)
-                if self.game:
-                    front_center = (
-                        self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 2),
-                        self.rect.centery,
-                    )
-                    self.game.spawn_dig_particles(front_center)
-            else:
-                self.set_state(RootlingState.WALK)
-                return
+        if self.dig_horizontal_started:
+            self.set_state(RootlingState.WALK)
+            return
 
-        self.vel.xy = 0, 0
+        self.dig_timer = 0.0
+        self.vel.x = WALK_SPEED * self.direction
+        self.vel.y = 0
+        self.apply_horizontal_movement(level, self.vel.x * dt)
+        if not self.check_ground(level):
+            self.set_state(RootlingState.FALL)
 
     def update_bridge(self, dt: float, level: Level) -> None:
         if self.bridge_anchor is None:
