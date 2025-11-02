@@ -3,7 +3,8 @@ Rootlings Prototype
 ===================
 How to run: pip install pygame; python rootlings_prototype.py
 Controls: Left click to select a Rootling. Right click to cancel a blocker or clear selection.
-Hotkeys: 1 = Dig, 2 = Bridge, 3 = Block, R = Restart, ESC = Quit, F1 = Toggle debug overlay.
+Task bar: Click a task icon to arm or disarm it, then click Rootlings to assign the task.
+Hotkeys: R = Restart, ESC = Quit, F1 = Toggle debug overlay.
 Win condition: Save at least the required number of Rootlings before the timer expires.
 Lose condition: Timer expires without enough saves or all Rootlings are gone.
 Known limitations: Simplified physics and AI, single hardcoded level, minimal audio/visual feedback.
@@ -974,10 +975,25 @@ class HUD:
     def __init__(self, screen: pygame.Surface) -> None:
         self.font_small = pygame.font.Font(None, 22)
         self.font_large = pygame.font.Font(None, 30)
+        self.font_label = pygame.font.Font(None, 20)
         self.screen = screen
+        self.ability_order = ['dig', 'bridge', 'block', 'bomber']
+        self.button_rects: Dict[str, pygame.Rect] = {}
+        self.button_size = 56
+        self.button_padding = 14
+        self.panel_height = 140
+        self._layout_buttons()
+
+    def _layout_buttons(self) -> None:
+        start_x = 12
+        y = 52
+        for ability in self.ability_order:
+            rect = pygame.Rect(start_x, y, self.button_size, self.button_size)
+            self.button_rects[ability] = rect
+            start_x += self.button_size + self.button_padding
 
     def draw(self, game: 'Game') -> None:
-        hud_rect = pygame.Rect(0, 0, SCREEN_WIDTH, 40)
+        hud_rect = pygame.Rect(0, 0, SCREEN_WIDTH, self.panel_height)
         hud_surface = pygame.Surface(hud_rect.size, pygame.SRCALPHA)
         hud_surface.fill(COLOR_HUD_BG)
 
@@ -998,11 +1014,95 @@ class HUD:
             hud_surface.blit(text, (x, y))
             y += 14
 
-        hint = "1:Dig 2:Bridge 3:Block 4:Bomber | X:Explode selected | R:Restart | ESC:Quit"
+        hint = "Click a task icon to arm it, then click Rootlings to assign | X:Explode selected | R:Restart | ESC:Quit"
         text = self.font_small.render(hint, True, COLOR_HUD_TEXT)
         hud_surface.blit(text, (SCREEN_WIDTH - text.get_width() - 12, 12))
 
+        for ability in self.ability_order:
+            rect = self.button_rects[ability]
+            self._draw_task_button(hud_surface, rect, ability, game)
+
         self.screen.blit(hud_surface, (0, 0))
+
+    def _draw_task_button(self, surface: pygame.Surface, rect: pygame.Rect, ability: str, game: 'Game') -> None:
+        is_active = game.armed_ability == ability
+        available = game.abilities.get(ability, 0) > 0
+        bg_color = (40, 45, 60)
+        border_color = COLOR_SELECTION if is_active else (90, 95, 110)
+        if not available and not is_active:
+            bg_color = (30, 30, 35)
+            border_color = (70, 70, 80)
+
+        pygame.draw.rect(surface, border_color, rect, border_radius=8)
+        inner = rect.inflate(-6, -6)
+        pygame.draw.rect(surface, bg_color, inner, border_radius=6)
+
+        icon_surface = pygame.Surface(inner.size, pygame.SRCALPHA)
+        self._paint_task_icon(icon_surface, ability)
+        surface.blit(icon_surface, inner.topleft)
+
+        count = game.abilities.get(ability, 0)
+        count_text = self.font_small.render(str(count), True, COLOR_HUD_TEXT)
+        surface.blit(count_text, (rect.right - count_text.get_width() - 6, rect.top + 4))
+
+        label = self.font_label.render(ability.capitalize(), True, COLOR_HUD_TEXT)
+        label_pos = label.get_rect(center=(rect.centerx, rect.bottom + 12))
+        surface.blit(label, label_pos)
+
+        if not available and not is_active:
+            overlay = pygame.Surface(inner.size, pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 120))
+            surface.blit(overlay, inner.topleft)
+
+    def _paint_task_icon(self, surface: pygame.Surface, ability: str) -> None:
+        surface.fill((0, 0, 0, 0))
+        w, h = surface.get_size()
+        center = (w // 2, h // 2)
+
+        if ability == 'dig':
+            mound_rect = pygame.Rect(0, 0, w - 12, h // 2)
+            mound_rect.midbottom = (center[0], h - 6)
+            pygame.draw.ellipse(surface, (120, 90, 60), mound_rect)
+            handle = pygame.Rect(0, 0, 6, h // 2)
+            handle.midtop = (center[0], 6)
+            pygame.draw.rect(surface, (150, 110, 70), handle)
+            blade_points = [
+                (center[0] - 10, handle.bottom - 6),
+                (center[0] + 10, handle.bottom - 6),
+                (center[0], handle.bottom + 10),
+            ]
+            pygame.draw.polygon(surface, (210, 210, 220), blade_points)
+        elif ability == 'bridge':
+            plank_color = (190, 170, 120)
+            for i in range(3):
+                top = 10 + i * 12
+                pygame.draw.rect(surface, plank_color, pygame.Rect(6, top, w - 12, 8), border_radius=2)
+            for i in range(2):
+                x = 12 + i * (w - 24)
+                pygame.draw.line(surface, (140, 120, 90), (x, 10), (x, h - 10), 4)
+        elif ability == 'block':
+            shield_points = [
+                (center[0], 6),
+                (w - 10, h // 2 - 6),
+                (center[0], h - 8),
+                (10, h // 2 - 6),
+            ]
+            pygame.draw.polygon(surface, (200, 70, 70), shield_points)
+            pygame.draw.line(surface, (250, 240, 220), (center[0], 12), (center[0], h - 14), 6)
+        elif ability == 'bomber':
+            pygame.draw.circle(surface, (40, 40, 50), center, min(w, h) // 3 + 4)
+            pygame.draw.circle(surface, (15, 15, 20), center, min(w, h) // 3)
+            fuse_start = (center[0], center[1] - min(w, h) // 3 - 6)
+            fuse_end = (fuse_start[0] + 12, fuse_start[1] - 10)
+            pygame.draw.line(surface, (200, 160, 80), fuse_start, fuse_end, 3)
+            pygame.draw.circle(surface, (255, 200, 120), (fuse_end[0] + 3, fuse_end[1] - 2), 4)
+
+    def ability_at(self, pos: Tuple[int, int]) -> Optional[str]:
+        for ability, rect in self.button_rects.items():
+            detection = pygame.Rect(rect.left, rect.top, rect.width, rect.height + 28)
+            if detection.collidepoint(pos):
+                return ability
+        return None
 
     def draw_end_screen(self, game: 'Game', message: str) -> None:
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -1056,6 +1156,7 @@ class Game:
             'block': MAX_BLOCKERS,
             'bomber': MAX_BOMBERS,
         }
+        self.armed_ability: Optional[str] = None
         self.saved = 0
         self.dead = 0
         self.time_left = TIME_LIMIT
@@ -1083,6 +1184,7 @@ class Game:
             'block': MAX_BLOCKERS,
             'bomber': MAX_BOMBERS,
         }
+        self.armed_ability = None
         self.saved = 0
         self.dead = 0
         self.time_left = TIME_LIMIT
@@ -1117,32 +1219,39 @@ class Game:
                     self.reset()
                 elif event.key == pygame.K_F1:
                     self.debug_overlay = not self.debug_overlay
-                elif self.game_state == GameState.RUNNING:
-                    if event.key == pygame.K_1:
-                        self.try_assign('dig')
-                    elif event.key == pygame.K_2:
-                        self.try_assign('bridge')
-                    elif event.key == pygame.K_3:
-                        self.try_assign('block')
-                    elif event.key == pygame.K_4:
-                        self.try_assign('bomber')
-                    elif event.key == pygame.K_x and self.selected:
-                        self.selected.explode()
+                elif event.key == pygame.K_x and self.selected:
+                    self.selected.explode()
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    self.select_rootling(event.pos)
+                    if self.game_state == GameState.RUNNING:
+                        ability = self.hud.ability_at(event.pos)
+                        if ability:
+                            self.toggle_ability(ability)
+                        else:
+                            self.select_rootling(event.pos)
+                    else:
+                        self.select_rootling(event.pos)
                 elif event.button == 3:
                     self.handle_right_click()
 
-    def try_assign(self, ability: str) -> None:
-        if not self.selected or self.game_state != GameState.RUNNING:
+    def toggle_ability(self, ability: str) -> None:
+        if self.armed_ability == ability:
+            self.armed_ability = None
             return
         if self.abilities.get(ability, 0) <= 0:
+            self.armed_ability = None
             return
+        self.armed_ability = ability
+
+    def try_assign(self, ability: str) -> bool:
+        if not self.selected or self.game_state != GameState.RUNNING:
+            return False
+        if self.abilities.get(ability, 0) <= 0:
+            return False
 
         active = set(self.selected.active_abilities())
         if ability in active:
-            return
+            return False
 
         cancelled = self.selected.cancel_current_tasks()
         for key in cancelled:
@@ -1152,6 +1261,8 @@ class Game:
 
         if self._apply_ability(self.selected, ability):
             self.abilities[ability] -= 1
+            return True
+        return False
 
     def select_rootling(self, pos: Tuple[int, int]) -> None:
         best: Optional[Rootling] = None
@@ -1170,6 +1281,10 @@ class Game:
         self.selected = best
         if self.selected:
             self.selected.selected = True
+            if self.armed_ability:
+                applied = self.try_assign(self.armed_ability)
+                if applied and self.abilities.get(self.armed_ability, 0) <= 0:
+                    self.armed_ability = None
 
     def handle_right_click(self) -> None:
         if self.selected and self.selected.state == RootlingState.BLOCK:
