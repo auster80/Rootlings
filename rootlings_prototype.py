@@ -83,7 +83,10 @@ COLOR_PARTICLE_SPARK = (208, 190, 130, 255)
 SPRITE_W = 40
 SPRITE_H = 40
 
-LEVEL_LAYOUT = """
+LEVELS = [
+    {
+        "name": "Cliffside Cavern",
+        "layout": """
 ########################################
 #......................................#
 #..............@@@@@@..................#
@@ -106,7 +109,114 @@ LEVEL_LAYOUT = """
 #..................@@@.................#
 #......................................#
 ########################################
-""".strip("\n")
+""".strip("\n"),
+    },
+    {
+        "name": "Mirror March",
+        "layout": """
+########################################
+#......................................#
+#..................@@@@@@..............#
+#..................@....@..............#
+#..................@....@..............#
+#E.................@....@.......S......#
+#..................@....@..............#
+#..................@....@..............#
+#..................@....@..............#
+#..................@....@..............#
+#..................@....@..............#
+#..................@....@..............#
+#..................@....@..########....#
+#..................@....@...~~~........#
+#..................@....@...~~~........#
+#..................@....@...~~~........#
+#..................@....@..............#
+#..................@....@#########.....#
+#..................@....@..............#
+#.................@@@..................#
+#......................................#
+########################################
+""".strip("\n"),
+    },
+    {
+        "name": "Terraced Gallery",
+        "layout": """
+########################################
+#......................................#
+#.....@@@@@...................@@@@@....#
+#.....@...@...................@...@....#
+#.....@...@...................@...@....#
+#.....@...@..........#####....@...@....#
+#.....@...@..........#...#....@...@....#
+#.....@...@..........#...#....@...@.E..#
+#.....@...@..........#...#....@...@....#
+#.....@...@..........#####....@...@....#
+#.....@...@...................@...@....#
+#.....@...@...................@...@....#
+#.....@...@......#####........@...@....#
+#.....@...@......#...#........@...@....#
+#.....@...@......#...#........@...@....#
+#S....@...@......#...#........@...@....#
+#.....@...@......#####........@...@....#
+#.....@...@...................@...@....#
+#.....@@@@@...................@@@@@....#
+#......................................#
+########################################
+""".strip("\n"),
+    },
+    {
+        "name": "Outpost Ridge",
+        "layout": """
+########################################
+#......................................#
+#..@@@@@@.........................@@@@.#
+#..@....@.........................@..@.#
+#..@....@.........................@..@.#
+#..@....@............#####........@..@.#
+#..@....@............#...#........@..@.#
+#..@....@............#...#........@..@.#
+#..@....@............#...#........@..@.#
+#..@....@............#...#........@..@.#
+#..@....@............#####........@..@.#
+#..@....@..........................@..@#
+#..@....@..........................@..@#
+#..@....@......#####...............@..@#
+#..@....@......#...#...............@..@#
+#S.@....@......#...#...............@..E#
+#..@....@......#...#...............@..@#
+#..@....@......#####...............@..@#
+#..@....#........~~~...............@..@#
+#......##........~~~...............@@@@#
+########################################
+""".strip("\n"),
+    },
+    {
+        "name": "Flooded Hollows",
+        "layout": """
+########################################
+#......................................#
+#..@@@@@@..............................#
+#..@....@..............................#
+#..@....@........######................#
+#..@....@........#....#................#
+#..@....@........#....#................#
+#..@....@........#....#................#
+#..@....@........#....#................#
+#..@....@....S...#....#.........@@@@...#
+#..@....@........#....#.........@..@...#
+#..@....@........#....#.........@..@...#
+#..@....@....#####....#.........@..@...#
+#..@....@........#....#.........@..@...#
+#..@....@........######.........@..@...#
+#..@....@.......................@..@...#
+#..@....@.......~~~~~...........@..@.E.#
+#..@....@.......~~~~~...........@..@...#
+#..@....@.......~~~~~...........@..@...#
+#..@@@@@@.......................@@@@...#
+########################################
+""".strip("\n"),
+    },
+]
 
 
 # --------------------------------------------------------------------------------------
@@ -384,6 +494,7 @@ class RootlingState(Enum):
 class GameState(Enum):
     """High level game states."""
 
+    LEVEL_SELECT = auto()
     RUNNING = auto()
     WIN = auto()
     LOSE = auto()
@@ -998,6 +1109,7 @@ class HUD:
         hud_surface.fill(COLOR_HUD_BG)
 
         text_lines = [
+            f"Level: {game.level_name}",
             f"Spawned {game.spawner.spawned}/{game.spawner.total} | Saved {game.saved} | Dead {game.dead}",
             (
                 f"Dig {game.abilities['dig']}/{MAX_DIGGERS} | "
@@ -1014,7 +1126,7 @@ class HUD:
             hud_surface.blit(text, (x, y))
             y += 14
 
-        hint = "Click a task icon to arm it, then click Rootlings to assign | X:Explode selected | R:Restart | ESC:Quit"
+        hint = "Click task icon then Rootlings | X:Explode | R:Level Select | 1-9:Pick Level | ESC:Quit"
         text = self.font_small.render(hint, True, COLOR_HUD_TEXT)
         hud_surface.blit(text, (SCREEN_WIDTH - text.get_width() - 12, 12))
 
@@ -1109,9 +1221,42 @@ class HUD:
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))
         title = self.font_large.render(message, True, COLOR_HUD_TEXT)
-        prompt = self.font_small.render("Press R to restart", True, COLOR_HUD_TEXT)
+        prompt = self.font_small.render("Press R to choose a level", True, COLOR_HUD_TEXT)
         self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20)))
         self.screen.blit(prompt, prompt.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 10)))
+
+    def draw_level_select(self, game: 'Game') -> None:
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        self.screen.blit(overlay, (0, 0))
+
+        title = self.font_large.render("Select Level", True, COLOR_HUD_TEXT)
+        self.screen.blit(title, title.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 140)))
+
+        item_spacing = 34
+        start_y = SCREEN_HEIGHT // 2 - (len(game.levels) * item_spacing) // 2
+        for idx, info in enumerate(game.levels):
+            label_text = f"{idx + 1}. {info['name']}"
+            is_selected = idx == game.level_index
+            color = COLOR_SELECTION if is_selected else COLOR_HUD_TEXT
+            label = self.font_large.render(label_text, True, color)
+            rect = label.get_rect(center=(SCREEN_WIDTH // 2, start_y + idx * item_spacing))
+            if is_selected:
+                highlight = pygame.Surface((rect.width + 40, rect.height + 12), pygame.SRCALPHA)
+                highlight.fill((40, 45, 70, 200))
+                highlight_rect = highlight.get_rect(center=rect.center)
+                self.screen.blit(highlight, highlight_rect)
+                pygame.draw.rect(self.screen, COLOR_SELECTION, highlight_rect, width=2, border_radius=10)
+                rect = label.get_rect(center=rect.center)  # recompute as highlight blit offsets
+            self.screen.blit(label, rect)
+
+        instructions = [
+            "Press number keys to choose a level.",
+            "Use ←/→ or A/D to preview, Enter or Space to start.",
+        ]
+        for i, line in enumerate(instructions):
+            hint = self.font_small.render(line, True, COLOR_HUD_TEXT)
+            self.screen.blit(hint, hint.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 140 + i * 18)))
 
     def draw_debug(self, game: 'Game', fps: float) -> None:
         lines = [
@@ -1144,18 +1289,12 @@ class Game:
         pygame.display.set_caption("Rootlings Prototype")
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.clock = pygame.time.Clock()
-        self.level = Level(LEVEL_LAYOUT)
-        self.spawner = Spawner(self.level)
-        self.exit_zone = ExitZone(self.level.exit_rect)
+        self.levels = LEVELS
+        self.level_index = 0
+        self.level_name = self.levels[self.level_index]["name"]
         self.rootlings: List[Rootling] = []
         self.hud = HUD(self.screen)
-        self.game_state = GameState.RUNNING
-        self.abilities = {
-            'dig': MAX_DIGGERS,
-            'bridge': MAX_BRIDGERS,
-            'block': MAX_BLOCKERS,
-            'bomber': MAX_BOMBERS,
-        }
+        self.game_state = GameState.LEVEL_SELECT
         self.armed_ability: Optional[str] = None
         self.saved = 0
         self.dead = 0
@@ -1170,13 +1309,18 @@ class Game:
         self.shake_mag = 0
         self.render_offset: Tuple[int, int] = (0, 0)
         self.sprite_cache: Dict[Tuple[int, int], pygame.Surface] = {}
+        self.enter_level_select(self.level_index)
 
     # ----------------------------------------------------------------------------------
-    def reset(self) -> None:
-        self.level = Level(LEVEL_LAYOUT)
-        self.level.reset_dynamic()
+    def _build_level(self, index: int) -> None:
+        info = self.levels[index]
+        self.level = Level(info["layout"])
+        self.level_name = info["name"]
         self.spawner = Spawner(self.level)
         self.exit_zone = ExitZone(self.level.exit_rect)
+
+    def _clear_round_state(self) -> None:
+        self.level.reset_dynamic()
         self.rootlings.clear()
         self.abilities = {
             'dig': MAX_DIGGERS,
@@ -1188,12 +1332,30 @@ class Game:
         self.saved = 0
         self.dead = 0
         self.time_left = TIME_LIMIT
-        self.game_state = GameState.RUNNING
         self.selected = None
         self.accumulator = 0.0
         self.particles.clear()
         self.shake_time = 0.0
         self.shake_mag = 0
+
+    def enter_level_select(self, default_index: int = 0) -> None:
+        if not self.levels:
+            raise ValueError("No level layouts configured.")
+        self.level_index = default_index % len(self.levels)
+        self._build_level(self.level_index)
+        self._clear_round_state()
+        self.game_state = GameState.LEVEL_SELECT
+
+    def start_level(self, index: int) -> None:
+        if not self.levels:
+            raise ValueError("No level layouts configured.")
+        self.level_index = index % len(self.levels)
+        self._build_level(self.level_index)
+        self._clear_round_state()
+        self.game_state = GameState.RUNNING
+
+    def reset(self) -> None:
+        self.enter_level_select(self.level_index)
 
     def run(self) -> None:
         while self.running:
@@ -1215,6 +1377,21 @@ class Game:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
+                    continue
+                if self.game_state == GameState.LEVEL_SELECT:
+                    if pygame.K_1 <= event.key <= pygame.K_9:
+                        choice = event.key - pygame.K_1
+                        if choice < len(self.levels):
+                            self.start_level(choice)
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                        self.start_level(self.level_index)
+                    elif event.key in (pygame.K_LEFT, pygame.K_a):
+                        self.enter_level_select(self.level_index - 1)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        self.enter_level_select(self.level_index + 1)
+                    elif event.key == pygame.K_r:
+                        self.enter_level_select(self.level_index)
+                    continue
                 elif event.key == pygame.K_r:
                     self.reset()
                 elif event.key == pygame.K_F1:
@@ -1253,11 +1430,16 @@ class Game:
         if ability in active:
             return False
 
-        cancelled = self.selected.cancel_current_tasks()
-        for key in cancelled:
-            if key in self.abilities:
-                max_val = ABILITY_LIMITS.get(key, self.abilities[key])
-                self.abilities[key] = min(max_val, self.abilities[key] + 1)
+        cancelled: List[str] = []
+        if ability != 'bomber':
+            cancelled = self.selected.cancel_current_tasks()
+            for key in cancelled:
+                if key in self.abilities:
+                    max_val = ABILITY_LIMITS.get(key, self.abilities[key])
+                    self.abilities[key] = min(max_val, self.abilities[key] + 1)
+        else:
+            # Bomber overlays other tasks; keep existing assignments running.
+            cancelled = []
 
         if self._apply_ability(self.selected, ability):
             self.abilities[ability] -= 1
@@ -1455,7 +1637,9 @@ class Game:
         self.draw_particles()
         self.hud.draw(self)
 
-        if self.game_state == GameState.WIN:
+        if self.game_state == GameState.LEVEL_SELECT:
+            self.hud.draw_level_select(self)
+        elif self.game_state == GameState.WIN:
             self.hud.draw_end_screen(self, "Level Complete!")
         elif self.game_state == GameState.LOSE:
             self.hud.draw_end_screen(self, "Level Failed")
