@@ -50,6 +50,7 @@ SELECTION_RADIUS = 24
 HAZARD_KILL_DELAY = 0.05
 
 MAX_DIGGERS = 4
+MAX_DIG_HORIZONTAL = 3
 MAX_BRIDGERS = 6
 MAX_BLOCKERS = 2
 MAX_BOMBERS = 2
@@ -57,6 +58,7 @@ BOMBER_COUNTDOWN = 5.0
 
 ABILITY_LIMITS = {
     'dig': MAX_DIGGERS,
+    'dig_horizontal': MAX_DIG_HORIZONTAL,
     'bridge': MAX_BRIDGERS,
     'block': MAX_BLOCKERS,
     'bomber': MAX_BOMBERS,
@@ -385,6 +387,16 @@ def ensure_assets() -> None:
         for _ in range(6):
             frame.set_at((random.randint(14, 26), random.randint(28, 36)), DIRT)
 
+    def dig_horizontal_painter(frame: pygame.Surface, i: int, n: int) -> None:
+        sway = int(2 * math.sin((i / max(1, n)) * math.tau))
+        draw_potato_body(frame, lump=sway // 2, face_dir=1, arms="tool")
+        sparkle = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        for _ in range(5):
+            px = random.randint(24, 33)
+            py = random.randint(18, 30)
+            pygame.draw.circle(sparkle, DIRT, (px, py), 1)
+        frame.blit(sparkle, (0, 0))
+
     def bridge_painter(frame: pygame.Surface, i: int, n: int) -> None:
         draw_potato_body(frame, lump=0, face_dir=1, arms="tool")
         pygame.draw.circle(frame, WOOD, (28 + (i % 2), 16 - (i % 2)), 2)
@@ -414,6 +426,7 @@ def ensure_assets() -> None:
     make_sheet("assets/rootling/rootling_fall.png", 6, fall_painter)
     make_sheet("assets/rootling/rootling_fall_panic.png", 6, fall_panic_painter)
     make_sheet("assets/rootling/rootling_dig.png", 6, dig_painter)
+    make_sheet("assets/rootling/rootling_dig_horizontal.png", 6, dig_horizontal_painter)
     make_sheet("assets/rootling/rootling_bridge.png", 8, bridge_painter)
     make_sheet("assets/rootling/rootling_block.png", 4, block_painter)
     make_sheet("assets/rootling/rootling_explode.png", 10, explode_painter)
@@ -431,6 +444,20 @@ def ensure_assets() -> None:
         pygame.draw.line(sheet, WOOD, (30, 16), (24, 26), 3)
         pygame.draw.polygon(sheet, METAL, [(24, 26), (31, 30), (27, 34), (21, 30)])
         pygame.image.save(sheet, tool_dig_path)
+
+    tool_dig_horizontal_path = "assets/rootling/rootling_tool_dig_horizontal.png"
+    needs_dig_horizontal = True
+    if os.path.exists(tool_dig_horizontal_path):
+        try:
+            existing = pygame.image.load(tool_dig_horizontal_path)
+            needs_dig_horizontal = existing.get_size() != (SPRITE_W, SPRITE_H)
+        except Exception:
+            needs_dig_horizontal = True
+    if needs_dig_horizontal:
+        sheet = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+        pygame.draw.line(sheet, WOOD, (22, 14), (34, 20), 3)
+        pygame.draw.polygon(sheet, METAL, [(34, 20), (35, 28), (29, 30), (26, 23)])
+        pygame.image.save(sheet, tool_dig_horizontal_path)
 
     tool_bridge_path = "assets/rootling/rootling_tool_bridge.png"
     needs_bridge = True
@@ -456,10 +483,14 @@ def load_rootling_animations() -> Dict[str, List[pygame.Surface]]:
     animations["fall"] = load_sheet("assets/rootling/rootling_fall.png")
     animations["fall_p"] = load_sheet("assets/rootling/rootling_fall_panic.png")
     animations["dig"] = load_sheet("assets/rootling/rootling_dig.png")
+    animations["dig_horizontal"] = load_sheet("assets/rootling/rootling_dig_horizontal.png")
     animations["bridge"] = load_sheet("assets/rootling/rootling_bridge.png")
     animations["block"] = load_sheet("assets/rootling/rootling_block.png")
     animations["explode"] = load_sheet("assets/rootling/rootling_explode.png")
     animations["tool_dig"] = [pygame.image.load("assets/rootling/rootling_tool_dig.png").convert_alpha()]
+    animations["tool_dig_horizontal"] = [
+        pygame.image.load("assets/rootling/rootling_tool_dig_horizontal.png").convert_alpha()
+    ]
     animations["tool_bridge"] = [pygame.image.load("assets/rootling/rootling_tool_bridge.png").convert_alpha()]
     return animations
 
@@ -485,6 +516,7 @@ class RootlingState(Enum):
     WALK = auto()
     FALL = auto()
     DIG = auto()
+    DIG_HORIZONTAL = auto()
     BRIDGE = auto()
     BLOCK = auto()
     EXITED = auto()
@@ -714,7 +746,7 @@ class Rootling:
                 self.bridge_steps = 0
                 self.bridge_anchor = None
                 self.bridge_progress = 0.0
-            if state != RootlingState.DIG:
+            if state not in (RootlingState.DIG, RootlingState.DIG_HORIZONTAL):
                 self.dig_timer = 0.0
             if state != RootlingState.FALL:
                 self.panic = False
@@ -727,6 +759,17 @@ class Rootling:
     def assign_dig(self) -> bool:
         if self.state in (RootlingState.WALK, RootlingState.FALL):
             self.set_state(RootlingState.DIG)
+            self.dig_timer = 0.0
+            return True
+        return False
+
+    def assign_dig_horizontal(self) -> bool:
+        if self.state == RootlingState.WALK:
+            if not self.on_ground and self.level_ref is not None:
+                self.on_ground = self.check_ground(self.level_ref)
+            if not self.on_ground:
+                return False
+            self.set_state(RootlingState.DIG_HORIZONTAL)
             self.dig_timer = 0.0
             return True
         return False
@@ -759,6 +802,8 @@ class Rootling:
         abilities: List[str] = []
         if self.state == RootlingState.DIG:
             abilities.append('dig')
+        elif self.state == RootlingState.DIG_HORIZONTAL:
+            abilities.append('dig_horizontal')
         elif self.state == RootlingState.BRIDGE:
             abilities.append('bridge')
         elif self.state == RootlingState.BLOCK:
@@ -771,6 +816,9 @@ class Rootling:
         cancelled: List[str] = []
         if self.state == RootlingState.DIG:
             cancelled.append('dig')
+            self.set_state(RootlingState.WALK)
+        elif self.state == RootlingState.DIG_HORIZONTAL:
+            cancelled.append('dig_horizontal')
             self.set_state(RootlingState.WALK)
         elif self.state == RootlingState.BRIDGE:
             cancelled.append('bridge')
@@ -796,6 +844,8 @@ class Rootling:
             return "fall_p" if self.panic else "fall"
         if self.state == RootlingState.DIG:
             return "dig"
+        if self.state == RootlingState.DIG_HORIZONTAL:
+            return "dig_horizontal"
         if self.state == RootlingState.BRIDGE:
             return "bridge"
         if self.state == RootlingState.BLOCK:
@@ -866,6 +916,10 @@ class Rootling:
             self.update_dig(dt, level)
             self.update_animation(dt)
             return
+        if self.state == RootlingState.DIG_HORIZONTAL:
+            self.update_dig_horizontal(dt, level)
+            self.update_animation(dt)
+            return
 
         if self.state == RootlingState.BRIDGE:
             self.update_bridge(dt, level)
@@ -930,6 +984,47 @@ class Rootling:
                 self.set_state(RootlingState.FALL)
 
         self.on_ground = False
+        self.vel.xy = 0, 0
+
+    def update_dig_horizontal(self, dt: float, level: Level) -> None:
+        self.on_ground = self.check_ground(level)
+        if not self.on_ground:
+            self.set_state(RootlingState.FALL)
+            return
+
+        ahead_x = self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 6)
+        sample_points = [self.rect.top + 6, self.rect.centery - 2]
+        target_tiles: List[Tuple[int, int]] = []
+        for py in sample_points:
+            tile = level.world_to_tile(ahead_x, py)
+            if tile not in target_tiles and level.is_diggable(*tile):
+                target_tiles.append(tile)
+
+        if not target_tiles:
+            self.set_state(RootlingState.WALK)
+            return
+
+        self.dig_timer += dt
+        if self.dig_timer >= DIG_INTERVAL:
+            self.dig_timer -= DIG_INTERVAL
+            removed = False
+            for tile in target_tiles:
+                if level.dig_tile(*tile):
+                    removed = True
+            if removed:
+                step = self.direction * 6
+                self.apply_horizontal_movement(level, step)
+                self.on_ground = self.check_ground(level)
+                if self.game:
+                    front_center = (
+                        self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 2),
+                        self.rect.centery,
+                    )
+                    self.game.spawn_dig_particles(front_center)
+            else:
+                self.set_state(RootlingState.WALK)
+                return
+
         self.vel.xy = 0, 0
 
     def update_bridge(self, dt: float, level: Level) -> None:
@@ -1088,7 +1183,7 @@ class HUD:
         self.font_large = pygame.font.Font(None, 30)
         self.font_label = pygame.font.Font(None, 20)
         self.screen = screen
-        self.ability_order = ['dig', 'bridge', 'block', 'bomber']
+        self.ability_order = ['dig', 'dig_horizontal', 'bridge', 'block', 'bomber']
         self.button_rects: Dict[str, pygame.Rect] = {}
         self.button_size = 56
         self.button_padding = 14
@@ -1112,7 +1207,8 @@ class HUD:
             f"Level: {game.level_name}",
             f"Spawned {game.spawner.spawned}/{game.spawner.total} | Saved {game.saved} | Dead {game.dead}",
             (
-                f"Dig {game.abilities['dig']}/{MAX_DIGGERS} | "
+                f"Dig Down {game.abilities['dig']}/{MAX_DIGGERS} | "
+                f"Dig Horiz {game.abilities['dig_horizontal']}/{MAX_DIG_HORIZONTAL} | "
                 f"Bridge {game.abilities['bridge']}/{MAX_BRIDGERS} | "
                 f"Block {game.abilities['block']}/{MAX_BLOCKERS} | "
                 f"Bomber {game.abilities['bomber']}/{MAX_BOMBERS}"
@@ -1157,7 +1253,15 @@ class HUD:
         count_text = self.font_small.render(str(count), True, COLOR_HUD_TEXT)
         surface.blit(count_text, (rect.right - count_text.get_width() - 6, rect.top + 4))
 
-        label = self.font_label.render(ability.capitalize(), True, COLOR_HUD_TEXT)
+        label_map = {
+            'dig': 'Dig Down',
+            'dig_horizontal': 'Dig Horiz',
+            'bridge': 'Bridge',
+            'block': 'Block',
+            'bomber': 'Bomber',
+        }
+        label_text = label_map.get(ability, ability.capitalize())
+        label = self.font_label.render(label_text, True, COLOR_HUD_TEXT)
         label_pos = label.get_rect(center=(rect.centerx, rect.bottom + 12))
         surface.blit(label, label_pos)
 
@@ -1184,6 +1288,20 @@ class HUD:
                 (center[0], handle.bottom + 10),
             ]
             pygame.draw.polygon(surface, (210, 210, 220), blade_points)
+        elif ability == 'dig_horizontal':
+            tunnel = pygame.Rect(10, h // 2 - 8, w - 20, 16)
+            pygame.draw.rect(surface, (90, 70, 50), tunnel, border_radius=6)
+            debris_color = (200, 170, 120)
+            for offset in (-12, -4, 6):
+                pygame.draw.circle(surface, debris_color, (center[0] + offset // 2 + 10, tunnel.centery), 3)
+            pick_start = (center[0] + 4, center[1])
+            pick_end = (pick_start[0] + 12, pick_start[1] - 6)
+            pygame.draw.line(surface, (150, 110, 70), pick_start, pick_end, 4)
+            pygame.draw.polygon(surface, (200, 210, 220), [
+                (pick_end[0] + 6, pick_end[1] - 4),
+                (pick_end[0] + 2, pick_end[1] + 4),
+                (pick_end[0] - 4, pick_end[1]),
+            ])
         elif ability == 'bridge':
             plank_color = (190, 170, 120)
             for i in range(3):
@@ -1324,6 +1442,7 @@ class Game:
         self.rootlings.clear()
         self.abilities = {
             'dig': MAX_DIGGERS,
+            'dig_horizontal': MAX_DIG_HORIZONTAL,
             'bridge': MAX_BRIDGERS,
             'block': MAX_BLOCKERS,
             'bomber': MAX_BOMBERS,
@@ -1481,6 +1600,8 @@ class Game:
     def _apply_ability(self, rootling: Rootling, ability: str) -> bool:
         if ability == 'dig':
             return rootling.assign_dig()
+        if ability == 'dig_horizontal':
+            return rootling.assign_dig_horizontal()
         if ability == 'bridge':
             return rootling.assign_bridge()
         if ability == 'block':
@@ -1583,10 +1704,16 @@ class Game:
                     "fall": Animation(self.anim_defs.get("fall", []), 10, True),
                     "fall_p": Animation(self.anim_defs.get("fall_p", []), 12, True),
                     "dig": Animation(self.anim_defs.get("dig", []), 10, True),
+                    "dig_horizontal": Animation(
+                        self.anim_defs.get("dig_horizontal", []), 10, True
+                    ),
                     "bridge": Animation(self.anim_defs.get("bridge", []), 10, True),
                     "block": Animation(self.anim_defs.get("block", []), 6, True),
                     "explode": Animation(self.anim_defs.get("explode", []), 16, False),
                     "tool_dig": Animation(self.anim_defs.get("tool_dig", []), 1, True),
+                    "tool_dig_horizontal": Animation(
+                        self.anim_defs.get("tool_dig_horizontal", []), 1, True
+                    ),
                     "tool_bridge": Animation(self.anim_defs.get("tool_bridge", []), 1, True),
                 }
                 rootling.game = self
@@ -1745,6 +1872,11 @@ class Game:
 
                 if key == "dig":
                     tool_anim = rootling.animations.get("tool_dig")
+                    if tool_anim and tool_anim.frames:
+                        tool_frame = get_sprite(tool_anim.frame, flip_x)
+                        self.screen.blit(tool_frame, (draw_x, draw_y))
+                elif key == "dig_horizontal":
+                    tool_anim = rootling.animations.get("tool_dig_horizontal")
                     if tool_anim and tool_anim.frames:
                         tool_frame = get_sprite(tool_anim.frame, flip_x)
                         self.screen.blit(tool_frame, (draw_x, draw_y))
