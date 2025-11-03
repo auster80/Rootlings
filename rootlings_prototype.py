@@ -36,7 +36,8 @@ WALK_SPEED = 90.0
 FALL_EPSILON = 2.0
 STEP_HEIGHT_PIXELS = TILE
 FATAL_FALL_TILES = 7
-SPAWN_INTERVAL = 0.5
+CLIMB_SPEED = 60.0
+SPAWN_INTERVAL = 1.5
 TOTAL_TO_SPAWN = 16
 REQUIRED_TO_SAVE = 12
 TIME_LIMIT = 180.0
@@ -54,6 +55,7 @@ MAX_DIG_HORIZONTAL = 3
 MAX_BRIDGERS = 6
 MAX_BLOCKERS = 2
 MAX_BOMBERS = 2
+MAX_CLIMBERS = 4
 BOMBER_COUNTDOWN = 5.0
 
 ABILITY_LIMITS = {
@@ -62,6 +64,7 @@ ABILITY_LIMITS = {
     'bridge': MAX_BRIDGERS,
     'block': MAX_BLOCKERS,
     'bomber': MAX_BOMBERS,
+    'climb': MAX_CLIMBERS,
 }
 
 COLOR_BG_TOP = (50, 65, 90)
@@ -479,7 +482,8 @@ def load_rootling_animations() -> Dict[str, List[pygame.Surface]]:
     if pygame.display.get_surface() is None:
         pygame.display.set_mode((1, 1))
     animations["idle"] = load_sheet("assets/rootling/rootling_idle.png")
-    animations["walk"] = load_sheet("assets/rootling/rootling_walk.png")
+    walk_frames = load_sheet("assets/rootling/rootling_walk.png")
+    animations["walk"] = walk_frames
     animations["fall"] = load_sheet("assets/rootling/rootling_fall.png")
     animations["fall_p"] = load_sheet("assets/rootling/rootling_fall_panic.png")
     animations["dig"] = load_sheet("assets/rootling/rootling_dig.png")
@@ -492,6 +496,13 @@ def load_rootling_animations() -> Dict[str, List[pygame.Surface]]:
         pygame.image.load("assets/rootling/rootling_tool_dig_horizontal.png").convert_alpha()
     ]
     animations["tool_bridge"] = [pygame.image.load("assets/rootling/rootling_tool_bridge.png").convert_alpha()]
+    climb_right = [pygame.transform.rotate(frame, 90) for frame in walk_frames]
+    climb_left: List[pygame.Surface] = []
+    for frame in walk_frames:
+        flipped = pygame.transform.flip(frame, True, False)
+        climb_left.append(pygame.transform.rotate(flipped, -90))
+    animations["climb_r"] = climb_right
+    animations["climb_l"] = climb_left
     return animations
 
 
@@ -515,6 +526,7 @@ class RootlingState(Enum):
 
     WALK = auto()
     FALL = auto()
+    CLIMB = auto()
     DIG = auto()
     DIG_HORIZONTAL = auto()
     BRIDGE = auto()
@@ -728,6 +740,11 @@ class Rootling:
         self.game: Optional['Game'] = None
         self.level_ref: Optional[Level] = None
         self.dig_horizontal_started = False
+        self.climb_task_assigned = False
+        self.climb_wall_tx: Optional[int] = None
+        self.climb_exit_y: Optional[float] = None
+        self.climb_exit_x: Optional[float] = None
+        self.climb_attach_x: Optional[float] = None
 
     # ----------------------------------------------------------------------------------
     # Utility properties
@@ -753,6 +770,13 @@ class Rootling:
                 self.dig_horizontal_started = False
             if state != RootlingState.FALL:
                 self.panic = False
+            if state != RootlingState.CLIMB:
+                self.climb_wall_tx = None
+                self.climb_exit_y = None
+                self.climb_exit_x = None
+                self.climb_attach_x = None
+            if state in (RootlingState.EXITED, RootlingState.DEAD):
+                self.climb_task_assigned = False
             self.state = state
             self._last_anim_key = None
 
@@ -802,6 +826,18 @@ class Rootling:
         self.bomber_timer = BOMBER_COUNTDOWN
         return True
 
+    def assign_climb(self) -> bool:
+        if self.state != RootlingState.WALK:
+            return False
+        if self.climb_task_assigned:
+            return False
+        if not self.on_ground and self.level_ref is not None:
+            self.on_ground = self.check_ground(self.level_ref)
+        if not self.on_ground:
+            return False
+        self.climb_task_assigned = True
+        return True
+
     def active_abilities(self) -> List[str]:
         abilities: List[str] = []
         if self.state == RootlingState.DIG:
@@ -812,12 +848,23 @@ class Rootling:
             abilities.append('bridge')
         elif self.state == RootlingState.BLOCK:
             abilities.append('block')
+        if self.state == RootlingState.CLIMB or self.climb_task_assigned:
+            abilities.append('climb')
         if self.bomber_timer is not None:
             abilities.append('bomber')
         return abilities
 
     def cancel_current_tasks(self) -> List[str]:
         cancelled: List[str] = []
+        if self.climb_task_assigned:
+            cancelled.append('climb')
+            if self.state == RootlingState.CLIMB:
+                self.set_state(RootlingState.FALL)
+            self.climb_task_assigned = False
+            self.climb_wall_tx = None
+            self.climb_exit_y = None
+            self.climb_exit_x = None
+            self.climb_attach_x = None
         if self.state == RootlingState.DIG:
             cancelled.append('dig')
             self.set_state(RootlingState.WALK)
@@ -846,6 +893,8 @@ class Rootling:
             return "walk"
         if self.state == RootlingState.FALL:
             return "fall_p" if self.panic else "fall"
+        if self.state == RootlingState.CLIMB:
+            return "climb_r" if self.direction >= 0 else "climb_l"
         if self.state == RootlingState.DIG:
             return "dig"
         if self.state == RootlingState.DIG_HORIZONTAL:
@@ -930,6 +979,11 @@ class Rootling:
             self.update_animation(dt)
             return
 
+        if self.state == RootlingState.CLIMB:
+            self.update_climb(dt, level)
+            self.update_animation(dt)
+            return
+
         if self.state == RootlingState.FALL:
             self.update_fall(dt, level)
         elif self.state == RootlingState.WALK:
@@ -944,6 +998,8 @@ class Rootling:
             return
 
         if self.wall_ahead(level):
+            if self.climb_task_assigned and self.try_start_climb(level):
+                return
             self.direction *= -1
 
         if self.check_blockers_ahead(others):
@@ -956,6 +1012,36 @@ class Rootling:
 
         if not self.check_ground(level):
             self.set_state(RootlingState.FALL)
+
+    def try_start_climb(self, level: Level) -> bool:
+        if not self.on_ground or not self.climb_task_assigned:
+            return False
+        front_x = self.rect.right + 1 if self.direction > 0 else self.rect.left - 1
+        foot_tx, foot_ty = level.world_to_tile(front_x, self.rect.bottom - 1)
+        if not level.is_solid(foot_tx, foot_ty):
+            return False
+        scan_ty = foot_ty
+        while scan_ty >= 0 and level.is_solid(foot_tx, scan_ty):
+            scan_ty -= 1
+        if scan_ty < 0:
+            return False
+        exit_tile_y = scan_ty + 1
+        exit_y = exit_tile_y * TILE - ROOTLING_HEIGHT
+        tile_left = foot_tx * TILE
+        final_x = tile_left + (TILE - ROOTLING_WIDTH) / 2
+        final_rect = pygame.Rect(int(final_x), int(exit_y), ROOTLING_WIDTH, ROOTLING_HEIGHT)
+        if level.rect_collides_solid(final_rect):
+            return False
+        attach_x = tile_left - ROOTLING_WIDTH if self.direction > 0 else tile_left + TILE
+        self.climb_wall_tx = foot_tx
+        self.climb_exit_y = exit_y
+        self.climb_exit_x = final_x
+        self.climb_attach_x = attach_x
+        self.pos.x = attach_x
+        self.set_state(RootlingState.CLIMB)
+        self.on_ground = False
+        self.vel.xy = 0, -CLIMB_SPEED
+        return True
 
     def update_fall(self, dt: float, level: Level) -> None:
         self.vel.y = min(self.vel.y + GRAVITY * dt, TERMINAL_VEL)
@@ -995,19 +1081,23 @@ class Rootling:
         if not self.on_ground:
             self.set_state(RootlingState.FALL)
             return
-
-        ahead_x = self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 6)
+        ahead_close = self.rect.centerx + self.direction * (ROOTLING_WIDTH // 2 + 6)
+        ahead_far = ahead_close + self.direction * TILE
         sample_points = [self.rect.top + 6, self.rect.centery - 2]
-        diggable_tiles: List[Tuple[int, int]] = []
-        solid_tiles: List[Tuple[int, int]] = []
+        close_tiles: List[Tuple[int, int]] = []
+        far_tiles: List[Tuple[int, int]] = []
         for py in sample_points:
-            tile = level.world_to_tile(ahead_x, py)
-            if level.is_diggable(*tile):
-                if tile not in diggable_tiles:
-                    diggable_tiles.append(tile)
-            elif level.is_solid(*tile):
-                if tile not in solid_tiles:
-                    solid_tiles.append(tile)
+            close_tile = level.world_to_tile(ahead_close, py)
+            if close_tile not in close_tiles:
+                close_tiles.append(close_tile)
+            far_tile = level.world_to_tile(ahead_far, py)
+            if far_tile not in far_tiles:
+                far_tiles.append(far_tile)
+
+        diggable_tiles = [tile for tile in close_tiles if level.is_diggable(*tile)]
+        blocking_tiles = [tile for tile in close_tiles if level.is_solid(*tile) and not level.is_diggable(*tile)]
+        open_tiles = [tile for tile in close_tiles if not level.is_solid(*tile)]
+        future_diggable = any(level.is_diggable(*tile) for tile in far_tiles)
 
         if diggable_tiles:
             self.vel.xy = 0, 0
@@ -1032,15 +1122,12 @@ class Rootling:
                 else:
                     self.set_state(RootlingState.WALK)
             return
-
-        if solid_tiles:
+        if blocking_tiles:
             self.set_state(RootlingState.WALK)
             return
-
-        if self.dig_horizontal_started:
+        if open_tiles and not future_diggable:
             self.set_state(RootlingState.WALK)
             return
-
         self.dig_timer = 0.0
         self.vel.x = WALK_SPEED * self.direction
         self.vel.y = 0
@@ -1086,6 +1173,44 @@ class Rootling:
 
         if not level.rect_collides_solid(self.rect.move(0, 1)):
             self.set_state(RootlingState.FALL)
+
+    def update_climb(self, dt: float, level: Level) -> None:
+        if not self.climb_task_assigned or self.climb_wall_tx is None or self.climb_exit_y is None:
+            self.climb_task_assigned = False
+            self.set_state(RootlingState.FALL)
+            self.vel.y = 0.0
+            return
+        if self.climb_attach_x is not None:
+            self.pos.x = self.climb_attach_x
+        self.vel.x = 0.0
+        climb_distance = CLIMB_SPEED * dt
+        travelled = 0.0
+        while travelled < climb_distance:
+            step = min(4.0, climb_distance - travelled)
+            test_rect = self.rect.move(0, -step)
+            if level.rect_collides_solid(test_rect):
+                self.climb_task_assigned = False
+                self.set_state(RootlingState.FALL)
+                self.vel.y = 0.0
+                return
+            self.pos.y -= step
+            travelled += step
+        self.vel.y = -CLIMB_SPEED
+        if self.pos.y <= self.climb_exit_y:
+            self.pos.y = self.climb_exit_y
+            if self.climb_exit_x is not None:
+                self.pos.x = self.climb_exit_x
+            self.climb_task_assigned = False
+            self.climb_wall_tx = None
+            self.climb_exit_y = None
+            self.climb_exit_x = None
+            self.climb_attach_x = None
+            self.set_state(RootlingState.WALK)
+            self.on_ground = True
+            self.vel.x = WALK_SPEED * self.direction
+            self.vel.y = 0.0
+        else:
+            self.on_ground = False
 
     def apply_horizontal_movement(self, level: Level, dx: float) -> None:
         if abs(dx) < 1e-4:
@@ -1181,6 +1306,11 @@ class Rootling:
             self.bomber_timer = None
             self.exploding = False
             self.selected = False
+            self.climb_task_assigned = False
+            self.climb_wall_tx = None
+            self.climb_exit_y = None
+            self.climb_exit_x = None
+            self.climb_attach_x = None
 
     def update_animation(self, dt: float) -> None:
         key = self.current_animation_key()
@@ -1204,7 +1334,7 @@ class HUD:
         self.font_large = pygame.font.Font(None, 30)
         self.font_label = pygame.font.Font(None, 20)
         self.screen = screen
-        self.ability_order = ['dig', 'dig_horizontal', 'bridge', 'block', 'bomber']
+        self.ability_order = ['dig', 'dig_horizontal', 'bridge', 'climb', 'block', 'bomber']
         self.button_rects: Dict[str, pygame.Rect] = {}
         self.button_size = 56
         self.button_padding = 14
@@ -1231,6 +1361,7 @@ class HUD:
                 f"Dig Down {game.abilities['dig']}/{MAX_DIGGERS} | "
                 f"Dig Horiz {game.abilities['dig_horizontal']}/{MAX_DIG_HORIZONTAL} | "
                 f"Bridge {game.abilities['bridge']}/{MAX_BRIDGERS} | "
+                f"Climb {game.abilities['climb']}/{MAX_CLIMBERS} | "
                 f"Block {game.abilities['block']}/{MAX_BLOCKERS} | "
                 f"Bomber {game.abilities['bomber']}/{MAX_BOMBERS}"
             ),
@@ -1278,6 +1409,7 @@ class HUD:
             'dig': 'Dig Down',
             'dig_horizontal': 'Dig Horiz',
             'bridge': 'Bridge',
+            'climb': 'Climb',
             'block': 'Block',
             'bomber': 'Bomber',
         }
@@ -1340,6 +1472,21 @@ class HUD:
             ]
             pygame.draw.polygon(surface, (200, 70, 70), shield_points)
             pygame.draw.line(surface, (250, 240, 220), (center[0], 12), (center[0], h - 14), 6)
+        elif ability == 'climb':
+            wall_rect = pygame.Rect(0, 0, w // 3, h - 12)
+            wall_rect.midright = (w - 8, h // 2)
+            pygame.draw.rect(surface, (110, 95, 80), wall_rect, border_radius=4)
+            for i in range(3):
+                rung_y = h - 12 - i * 12
+                start = (wall_rect.left - 10, rung_y)
+                end = (wall_rect.right - 2, rung_y + 2)
+                pygame.draw.line(surface, (220, 220, 230), start, end, 3)
+            arrow_points = [
+                (wall_rect.left - 4, h - 14),
+                (wall_rect.left - 16, h - 14),
+                (wall_rect.left - 10, 12),
+            ]
+            pygame.draw.polygon(surface, COLOR_SELECTION, arrow_points)
         elif ability == 'bomber':
             pygame.draw.circle(surface, (40, 40, 50), center, min(w, h) // 3 + 4)
             pygame.draw.circle(surface, (15, 15, 20), center, min(w, h) // 3)
@@ -1465,6 +1612,7 @@ class Game:
             'dig': MAX_DIGGERS,
             'dig_horizontal': MAX_DIG_HORIZONTAL,
             'bridge': MAX_BRIDGERS,
+            'climb': MAX_CLIMBERS,
             'block': MAX_BLOCKERS,
             'bomber': MAX_BOMBERS,
         }
@@ -1625,6 +1773,8 @@ class Game:
             return rootling.assign_dig_horizontal()
         if ability == 'bridge':
             return rootling.assign_bridge()
+        if ability == 'climb':
+            return rootling.assign_climb()
         if ability == 'block':
             return rootling.assign_block()
         if ability == 'bomber':
@@ -1722,6 +1872,8 @@ class Game:
                 rootling.animations = {
                     "idle": Animation(self.anim_defs.get("idle", []), 8, True),
                     "walk": Animation(self.anim_defs.get("walk", []), 11, True),
+                    "climb_r": Animation(self.anim_defs.get("climb_r", []), 11, True),
+                    "climb_l": Animation(self.anim_defs.get("climb_l", []), 11, True),
                     "fall": Animation(self.anim_defs.get("fall", []), 10, True),
                     "fall_p": Animation(self.anim_defs.get("fall_p", []), 12, True),
                     "dig": Animation(self.anim_defs.get("dig", []), 10, True),
@@ -1852,7 +2004,8 @@ class Game:
             screen_rect = rect.move(ox, oy)
             draw_x = rect.x - (SPRITE_W - rect.width) // 2 + ox
             draw_y = rect.y - (SPRITE_H - rect.height) // 2 + oy
-            flip_x = rootling.direction < 0
+            key = rootling.current_animation_key()
+            flip_x = rootling.direction < 0 and not key.startswith("climb_")
 
             glow_alpha = int(90 + 60 * math.sin(time_factor + rootling.glow_phase))
             if glow_alpha > 0 and rootling.state != RootlingState.DEAD:
@@ -1882,13 +2035,17 @@ class Game:
                 self.screen.blit(surface, screen_rect)
                 continue
 
-            key = rootling.current_animation_key()
             anim = rootling.animations.get(key)
             sprite_drawn = False
             if anim and anim.frames:
                 frame = anim.frame
                 sprite = get_sprite(frame, flip_x)
-                self.screen.blit(sprite, (draw_x, draw_y))
+                climb_offset_x = 0
+                if key.startswith("climb_"):
+                    offset_amount = ((SPRITE_W - ROOTLING_WIDTH) // 2) - 2
+                    climb_offset_x = offset_amount if key == "climb_r" else -offset_amount
+                draw_pos = (draw_x + climb_offset_x, draw_y)
+                self.screen.blit(sprite, draw_pos)
                 sprite_drawn = True
 
                 if key == "dig":
